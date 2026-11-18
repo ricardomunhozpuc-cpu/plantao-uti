@@ -35,7 +35,8 @@ create table public.settings (
   id            int  primary key default 1 check (id = 1),
   tolerance_min int  not null default 10 check (tolerance_min between 0 and 60),  -- tolerância de atraso
   early_min     int  not null default 60 check (early_min between 0 and 180),     -- check-in liberado antes do início
-  tz            text not null default 'America/Sao_Paulo'
+  tz            text not null default 'America/Sao_Paulo',
+  max_acc_m     int  not null default 100 check (max_acc_m between 10 and 500)  -- precisão mínima do GPS
 );
 insert into public.settings default values;
 
@@ -44,7 +45,7 @@ create table public.hospitals (
   name     text not null,
   lat      double precision check (lat between -90 and 90),
   lng      double precision check (lng between -180 and 180),
-  radius_m int  not null default 300 check (radius_m between 50 and 2000),
+  radius_m int  not null default 100 check (radius_m between 50 and 2000),
   sort     int  not null default 0
 );
 
@@ -187,6 +188,19 @@ begin
   if p_lat is null or p_lng is null or p_lat not between -90 and 90 or p_lng not between -180 and 180
      or (p_lat = 0 and p_lng = 0) then
     raise exception 'Localização inválida. Tente de novo com o GPS ligado.';
+  end if;
+end $$;
+
+-- Precisão mínima do GPS (settings.max_acc_m)
+create or replace function public._check_accuracy(p_acc float8) returns void
+language plpgsql stable security definer set search_path = public as $$
+declare v_max int := (select max_acc_m from settings where id = 1);
+begin
+  if p_acc is null or p_acc <= 0 then
+    raise exception 'Não foi possível medir a precisão do GPS. Ative a localização precisa e tente de novo.';
+  end if;
+  if p_acc > v_max then
+    raise exception 'Sinal de GPS fraco (± % m; o limite é % m). Ative a localização precisa, vá para perto de uma janela e tente de novo.', round(p_acc), v_max;
   end if;
 end $$;
 
@@ -388,6 +402,7 @@ begin
   end if;
   select h.* into v_h from hospitals h join units u on u.hospital_id = h.id where u.id = v_sh.unit_id;
   if v_h.lat is null or v_h.lng is null then raise exception 'O gestor ainda não cadastrou a localização do %.', v_h.name; end if;
+  perform _check_accuracy(p_acc);
   v_d := dist_m(p_lat, p_lng, v_h.lat, v_h.lng);
   if v_d > v_h.radius_m then
     raise exception 'Você está a % do %. O registro é liberado a até % m.', fmt_dist(v_d), v_h.name, v_h.radius_m;
@@ -413,6 +428,7 @@ begin
   end if;
   select h.* into v_h from hospitals h join units u on u.hospital_id = h.id where u.id = v_a.unit_id;
   if v_h.lat is null or v_h.lng is null then raise exception 'O gestor ainda não cadastrou a localização do %.', v_h.name; end if;
+  perform _check_accuracy(p_acc);
   v_d := dist_m(p_lat, p_lng, v_h.lat, v_h.lng);
   if v_d > v_h.radius_m then
     raise exception 'Você está a % do %. O registro é liberado a até % m.', fmt_dist(v_d), v_h.name, v_h.radius_m;
@@ -493,6 +509,7 @@ revoke execute on all functions in schema public from public, anon;
 grant  execute on all functions in schema public to authenticated;
 revoke execute on function public._swap_problem(text, text, uuid, uuid) from authenticated;
 revoke execute on function public._check_coords(float8, float8)       from authenticated;
+revoke execute on function public._check_accuracy(float8)              from authenticated;
 revoke execute on function public._doctors_normalize()                 from authenticated;
 revoke execute on function public._keep_one_manager()                  from authenticated;
 revoke execute on function public._settings_check_tz()                 from authenticated;

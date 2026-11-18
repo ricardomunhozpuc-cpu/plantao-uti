@@ -1,7 +1,7 @@
 /* Service worker do Plantão UTI: rede primeiro, cache de reserva.
    Só arquivos do próprio domínio. Supabase e fontes nunca passam pelo cache.
    Para forçar atualização nos celulares, troque o nome do cache (v1 -> v2). */
-const CACHE = 'plantao-uti-v1';
+const CACHE = 'plantao-uti-v2';
 const SHELL = ['./', 'index.html', 'app.js', 'config.js', 'vendor/supabase.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png', 'icons/apple-touch-icon.png'];
 

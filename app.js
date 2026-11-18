@@ -846,7 +846,7 @@
       const { data, error } = await sb.rpc(kind === 'in' ? 'check_in' : 'check_out', { p_shift: id, p_lat: p.lat, p_lng: p.lng, p_acc: p.acc });
       if (error) {
         let msg = errText(error);
-        if (p.acc > 150) msg += ' A precisão do GPS está baixa (± ' + Math.round(p.acc) + ' m): ative a "localização precisa" para o navegador ou app e tente de novo.';
+        if (p.acc > 100 && !/Sinal de GPS/.test(msg)) msg += ' A precisão do GPS está baixa (± ' + Math.round(p.acc) + ' m): ative a "localização precisa" para o navegador ou app e tente de novo.';
         throw new Error(msg);
       }
       await loadAtt(); render(true);
