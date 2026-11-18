@@ -1,7 +1,8 @@
-/* Service worker do Plantão UTI: rede primeiro, cache de reserva.
-   Só arquivos do próprio domínio. Supabase e fontes nunca passam pelo cache.
-   Para forçar atualização nos celulares, troque o nome do cache (v1 -> v2). */
-const CACHE = 'plantao-uti-v2';
+/* Service worker do Plantão UTI.
+   Arquivos do app: abre na hora a partir do cache e atualiza em segundo plano
+   (a versão nova aparece na abertura seguinte). Supabase e fontes vão direto à rede.
+   Para forçar atualização imediata nos celulares, troque o nome do cache (v3 -> v4). */
+const CACHE = 'plantao-uti-v3';
 const SHELL = ['./', 'index.html', 'app.js', 'config.js', 'vendor/supabase.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png', 'icons/apple-touch-icon.png'];
 
@@ -16,14 +17,11 @@ self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
-  if (url.origin !== self.location.origin) return;           // Supabase, Google Fonts etc.: direto na rede
-  e.respondWith(
-    fetch(req).then((res) => {
-      if (res && res.ok && res.type === 'basic') {
-        const copy = res.clone();
-        caches.open(CACHE).then((c) => c.put(req, copy));
-      }
-      return res;
-    }).catch(() => caches.match(req, { ignoreSearch: true }).then((r) => r || (req.mode === 'navigate' ? caches.match('index.html') : undefined)))
-  );
+  if (url.origin !== self.location.origin) return;
+  e.respondWith(caches.open(CACHE).then(async (c) => {
+    const hit = await c.match(req, { ignoreSearch: true }) || (req.mode === 'navigate' ? await c.match('index.html') : undefined);
+    const net = fetch(req).then((res) => { if (res && res.ok && res.type === 'basic') c.put(req, res.clone()); return res; }).catch(() => undefined);
+    if (hit) { e.waitUntil(net); return hit; }
+    return (await net) || new Response('Sem conexão', { status: 503 });
+  }));
 });

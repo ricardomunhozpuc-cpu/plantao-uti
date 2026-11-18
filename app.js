@@ -291,8 +291,7 @@
       S.role = data.is_manager ? 'gestor' : 'plantonista';
       S.tab = S.role === 'gestor' ? 'agora' : 'meu';
       const today = new Date();
-      await loadStatic();
-      await Promise.all([ensureRange(ymd(addDays(today, -35)), ymd(addDays(today, 70))), loadSwaps()]);
+      await Promise.all([loadStatic(), ensureRange(ymd(addDays(today, -35)), ymd(addDays(today, 70))), loadSwaps()]);
       S.pres = { from: ymd(addDays(today, -30)), to: ymd(today), doctor: '' };
       S.started = true;
       subscribe();
@@ -709,10 +708,10 @@
   async function busy(el, label, fn) {
     if (el && el.disabled) return;
     const old = el ? el.innerHTML : '';
-    if (el) { el.disabled = true; if (label) el.textContent = label; }
+    if (el) { el.disabled = true; el.classList.add('busy'); if (label) el.textContent = label; }
     try { return await fn(); }
     catch (e) { toast(errText(e), 'bad'); }
-    finally { if (el && el.isConnected) { el.disabled = false; el.innerHTML = old; } }
+    finally { if (el && el.isConnected) { el.disabled = false; el.classList.remove('busy'); el.innerHTML = old; } }
   }
   const rpc = async (fn, args) => { const { data, error } = await sb.rpc(fn, args); if (error) throw error; return data; };
 
@@ -737,17 +736,18 @@
     pickDoc: async (el) => {
       const id = S.modal && S.modal.shiftId; if (!id) return;
       const doc = el.dataset.doc || null; const p = parseSid(id);
-      await busy(el, null, async () => {
-        if (doc) {
-          const { error } = await sb.from('shifts').upsert({ id, date: p.date, turn: p.turn, unit_id: p.unit, doctor_id: doc });
-          if (error) throw error;
-        } else {
-          const { error } = await sb.from('shifts').delete().eq('id', id);
-          if (error) throw error;
-        }
-        await loadShifts(); closeModal(); render(true);
-        toast(doc ? 'Escala atualizada.' : 'Plantão sem escala.', 'ok');
-      });
+      const prev = S.shifts.get(id);
+      // mostra o resultado na hora; grava em segundo plano e desfaz se der erro
+      if (doc) S.shifts.set(id, { id, date: p.date, turn: p.turn, unit_id: p.unit, doctor_id: doc }); else S.shifts.delete(id);
+      closeModal(); render(true);
+      const q = doc
+        ? sb.from('shifts').upsert({ id, date: p.date, turn: p.turn, unit_id: p.unit, doctor_id: doc })
+        : sb.from('shifts').delete().eq('id', id);
+      const { error } = await q;
+      if (error) {
+        if (prev) S.shifts.set(id, prev); else S.shifts.delete(id);
+        render(true); toast('Não foi possível salvar a escala: ' + errText(error), 'bad');
+      }
     },
     repeatWeek: async (el) => {
       const ws = S.week, now = new Date(), rows = [];

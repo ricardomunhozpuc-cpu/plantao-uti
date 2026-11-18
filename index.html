@@ -17,7 +17,7 @@
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
 <style>
 :root{
   --bg:#f3f6f6; --surface:#ffffff; --surface2:#eef3f3; --line:#d7e0e0; --text:#152325; --muted:#5b6d70;
@@ -90,6 +90,7 @@ hr{border:0;border-top:1px solid var(--line);margin:12px 0}
 .btn.big svg{width:24px;height:24px}
 .btn:hover{background:var(--surface2)}
 .btn:disabled{opacity:.5;cursor:not-allowed}
+.busy{opacity:.55;pointer-events:none;cursor:progress}
 .btn.primary{background:var(--brand);border-color:var(--brand);color:var(--brand-ink)}
 .btn.primary:hover{filter:brightness(1.05)}
 .btn.danger{color:var(--bad);border-color:var(--bad)}
