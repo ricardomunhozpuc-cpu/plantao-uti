@@ -1,7 +1,7 @@
 // Edge Function "push": envia notificações Web Push do Plantão UTI.
 // Chamada só pelo banco (cabeçalho x-cron-token). Corpos aceitos:
 //   {"event":"test","doctor_id":"..."}            teste para o próprio usuário
-//   {"event":"swap","id":"...","status":"..."}     avisos de troca (gatilho em swaps)
+//   {"event":"swap","id":"...","status":"..."}     avisos de troca e anúncio (gatilho em swaps)
 //   {"job":"tick"}                                 lembretes de check-in/out e UTI descoberta (pg_cron, 5 min)
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 import webpush from "npm:web-push@3.6.7";
@@ -75,13 +75,37 @@ Deno.serve(async (req) => {
         const from: any = doc.get(w.from_doctor) || {}, to: any = doc.get(w.to_doctor) || {};
         const what = desc(w.shift_id) + (w.return_shift_id ? ` ⇄ ${desc(w.return_shift_id)}` : "");
         const url = "./?tab=trocas", tag = `troca-${w.id}`;
-        if (w.status === "colega") await send([w.to_doctor], { title: `${short(from.name)} pediu uma troca`, body: what, url, tag });
-        else if (w.status === "gestor") {
-          await send(managers, { title: "Troca aguardando autorização", body: `${short(from.name)} → ${short(to.name)}: ${what}`, url, tag });
+        const mgrs = managers.filter((m: string) => m !== w.from_doctor && m !== w.to_doctor);
+        const started = shiftStart(tz, w.shift_id).getTime() <= Date.now();
+        if (w.status === "aberta") {
+          // anúncio: avisa colegas elegíveis (trabalham no hospital e estão livres no turno) e os gestores
+          const [date, turn, uid] = w.shift_id.split("_");
+          const hid = (unit.get(uid) as any || {}).hospital_id;
+          const [{ data: links }, { data: same }] = await Promise.all([
+            sb.from("doctor_hospitals").select("*"),
+            sb.from("shifts").select("doctor_id,unit_id").eq("date", date).eq("turn", turn),
+          ]);
+          const L = new Map<string, Set<string>>();
+          (links || []).forEach((l: any) => { if (!L.has(l.doctor_id)) L.set(l.doctor_id, new Set()); L.get(l.doctor_id)!.add(l.hospital_id); });
+          const busy = new Set((same || []).filter((x: any) => x.unit_id !== uid).map((x: any) => x.doctor_id));
+          const elig = (doctors || []).filter((d: any) => d.active && d.id !== w.from_doctor && !managers.includes(d.id)
+            && (!L.has(d.id) || L.get(d.id)!.has(hid)) && !busy.has(d.id)).map((d: any) => d.id);
+          await send(elig, { title: "Plantão disponível", body: `${short(from.name)} anunciou: ${what}. Toque para assumir.`, url, tag });
+          await send(mgrs, { title: "Plantão anunciado", body: `${short(from.name)} ofereceu para a equipe: ${what}`, url, tag: `${tag}-g` });
+        } else if (w.status === "colega") {
+          await send([w.to_doctor], { title: `${short(from.name)} pediu uma troca`, body: what, url, tag });
+          await send(mgrs, { title: "Nova proposta de troca", body: `${short(from.name)} → ${short(to.name)} (aguardando ${short(to.name)} aceitar): ${what}`, url, tag: `${tag}-g` });
+        } else if (w.status === "gestor") {
+          const took = body.old_status === "aberta";
+          await send(mgrs, { title: "Troca aguardando autorização", body: took ? `${short(to.name)} assumiu o plantão anunciado por ${short(from.name)}: ${what}` : `${short(from.name)} → ${short(to.name)}: ${what}`, url, tag: `${tag}-g` });
+          await send([w.from_doctor], { title: took ? `${short(to.name)} quer assumir seu plantão` : `${short(to.name)} aceitou sua troca`, body: `Aguardando autorização do gestor. ${what}`, url, tag });
         } else if (w.status === "recusada") await send([w.from_doctor], { title: `${short(to.name)} recusou a troca`, body: what, url, tag });
         else if (w.status === "aprovada") await send([w.from_doctor, w.to_doctor], { title: "Troca autorizada", body: `A escala foi atualizada: ${what}`, url, tag });
         else if (w.status === "negada") await send([w.from_doctor, w.to_doctor], { title: "Troca não autorizada", body: what, url, tag });
-        else if (w.status === "cancelada" && body.old_status) await send([w.to_doctor], { title: `${short(from.name)} cancelou o pedido de troca`, body: what, url, tag });
+        else if (w.status === "cancelada" && body.old_status && !started) {
+          if (w.to_doctor) await send([w.to_doctor], { title: `${short(from.name)} cancelou o pedido de troca`, body: what, url, tag });
+          await send(mgrs, { title: body.old_status === "aberta" ? "Anúncio de plantão cancelado" : "Pedido de troca cancelado", body: `${short(from.name)}: ${what}`, url, tag: `${tag}-g` });
+        }
       }
     } else if (body.job === "tick") {
       const now = new Date(), today = localYmd(tz, now), early = st.early_min * MIN, tol = st.tolerance_min * MIN;

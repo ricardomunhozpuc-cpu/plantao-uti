@@ -142,7 +142,16 @@
   const shiftDesc = (id) => { const p = parseSid(id); return fmtDay(p.date) + ' · ' + turnName(p.turn) + ' ' + turnHours(p.turn) + ' · ' + unitFull(p.unit); };
   const attOf = (shiftId, docId) => S.att.get(shiftId + '|' + docId);
   const docOf = (shiftId) => { const s = S.shifts.get(shiftId); return s ? s.doctor_id : null; };
-  const pendingSwapFor = (id) => S.swaps.find((w) => (w.status === 'colega' || w.status === 'gestor') && (w.shift_id === id || w.return_shift_id === id));
+  const pendingSwapFor = (id) => S.swaps.find((w) => (w.status === 'aberta' || w.status === 'colega' || w.status === 'gestor') && (w.shift_id === id || w.return_shift_id === id));
+  // Anúncios que o plantonista logado pode assumir (ou o motivo de não poder)
+  function takeBlock(w) {
+    const p = parseSid(w.shift_id), other = whereElse(S.me.id, p.date, p.turn, p.unit);
+    if (shiftStart(w.shift_id) <= new Date()) return 'O plantão já começou';
+    if (!worksAt(S.me.id, unitHosp(p.unit))) return 'Você não trabalha neste hospital';
+    if (other) return 'Você já está na ' + unitName(other) + ' neste turno';
+    return '';
+  }
+  const openAds = () => S.swaps.filter((w) => w.status === 'aberta' && w.from_doctor !== S.me.id && shiftStart(w.shift_id) > new Date() && worksAt(S.me.id, unitHosp(parseSid(w.shift_id).unit)));
   // Em que UTI um médico está num turno (exceto a UTI informada)
   function whereElse(docId, date, turn, exceptUnit) {
     for (const u of S.units) {
@@ -412,7 +421,7 @@
   };
   function swapBadge() {
     if (S.role === 'gestor') return S.swaps.filter((w) => w.status === 'gestor').length;
-    return S.swaps.filter((w) => w.status === 'colega' && w.to_doctor === S.me.id).length;
+    return S.swaps.filter((w) => w.status === 'colega' && w.to_doctor === S.me.id).length + openAds().filter((w) => !takeBlock(w)).length;
   }
   function isEditing() {
     const a = document.activeElement;
@@ -508,6 +517,7 @@
             let act = '';
             if (mgr) { act = ' data-act="cell" data-id="' + id + '"'; cls.push('click'); }
             else if (mine && future && !pend) { act = ' data-act="offer" data-id="' + id + '"'; cls.push('click'); }
+            else if (pend && pend.status === 'aberta' && pend.from_doctor !== S.me.id && !takeBlock(pend)) { act = ' data-act="take" data-id="' + pend.id + '"'; cls.push('click'); }
             const title = shiftDesc(id) + (doc ? ' — ' + docScaleName(doc) : '') + (conflict.has(id) ? ' (conflito)' : '') + (pend ? ' (troca em andamento)' : '');
             return '<td class="' + (d === today ? 'todaycol ' : '') + (d === slot.date && t === slot.turn ? 'nowcell' : '') + '"><button class="' + cls.join(' ') + '"' + act + ' title="' + esc(title) + '">' + (doc ? esc(shortName(docScaleName(doc))) : '—') + '</button></td>';
           }).join('') + '</tr>';
@@ -518,7 +528,7 @@
       filterChips() +
       '<div class="scroll-x"><table class="sched"><thead><tr><th class="uh" style="z-index:3">UTI</th><th></th>' +
       days.map((d) => '<th class="' + (d === today ? 'today' : '') + '">' + fmtDay(d) + '</th>').join('') + '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
-      '<div class="legend"><span>D = diurno 7h–19h · N = noturno 19h–7h</span><span><i style="background:var(--brand-soft)"></i>' + (mgr ? 'Seus plantões' : 'Seus plantões (toque para oferecer troca)') + '</span><span><i style="background:var(--bad-soft)"></i>Conflito</span><span><i style="box-shadow:inset 0 0 0 2px var(--warn)"></i>Troca em andamento</span></div>';
+      '<div class="legend"><span>D = diurno 7h–19h · N = noturno 19h–7h</span><span><i style="background:var(--brand-soft)"></i>' + (mgr ? 'Seus plantões' : 'Seus plantões (toque para oferecer troca)') + '</span><span><i style="background:var(--bad-soft)"></i>Conflito</span><span><i style="box-shadow:inset 0 0 0 2px var(--warn)"></i>Troca ou anúncio em andamento' + (mgr ? '' : ' (toque num anunciado para assumir)') + '</span></div>';
   }
 
   function filterChips() {
@@ -531,21 +541,29 @@
   /* ---------- Trocas (descrição) ---------- */
   function swapLine(w) {
     const perm = !!w.return_shift_id;
+    if (!w.to_doctor) {
+      return '<div class="title">' + esc(docHistName(w.from_doctor)) + '<span class="swap-arrow">→</span><i>toda a equipe</i> ' + chip('Anúncio', 'info') + '</div>' +
+        '<div class="small">Plantão oferecido: <b>' + esc(shiftDesc(w.shift_id)) + '</b></div>' +
+        (w.note ? '<div class="note">' + esc(w.note) + '</div>' : '') +
+        '<div class="muted tiny" style="margin-top:4px">Anunciado em ' + fmtDT(w.created_at) + '</div>';
+    }
     return '<div class="title">' + esc(docHistName(w.from_doctor)) + '<span class="swap-arrow">' + (perm ? '⇄' : '→') + '</span>' + esc(docHistName(w.to_doctor)) + ' ' + chip(perm ? 'Permuta' : 'Repasse', 'brand') + '</div>' +
       '<div class="small">' + esc(docHistName(w.from_doctor).split(' (')[0]) + ' entrega: <b>' + esc(shiftDesc(w.shift_id)) + '</b></div>' +
       (perm ? '<div class="small">' + esc(docHistName(w.to_doctor).split(' (')[0]) + ' entrega: <b>' + esc(shiftDesc(w.return_shift_id)) + '</b></div>' : '') +
       (w.note ? '<div class="note">' + esc(w.note) + '</div>' : '') +
       '<div class="muted tiny" style="margin-top:4px">Pedido em ' + fmtDT(w.created_at) + (w.colleague_at ? ' · colega respondeu em ' + fmtDT(w.colleague_at) : '') + (w.decided_at ? ' · gestor decidiu em ' + fmtDT(w.decided_at) + (w.decided_by ? ' (' + esc(shortName(docHistName(w.decided_by))) + ')' : '') : '') + '</div>';
   }
-  const STATUS = { colega: ['Aguardando colega', 'info'], gestor: ['Aguardando gestor', 'warn'], aprovada: ['Aprovada', 'ok'], recusada: ['Recusada pelo colega', 'bad'], negada: ['Não autorizada', 'bad'], cancelada: ['Cancelada', ''] };
+  const STATUS = { aberta: ['Anunciado à equipe', 'info'], colega: ['Aguardando colega', 'info'], gestor: ['Aguardando gestor', 'warn'], aprovada: ['Aprovada', 'ok'], recusada: ['Recusada pelo colega', 'bad'], negada: ['Não autorizada', 'bad'], cancelada: ['Cancelada', ''] };
   const statusChip = (s) => chip(STATUS[s][0], STATUS[s][1]);
 
   function viewTrocasGestor() {
     const wait = S.swaps.filter((w) => w.status === 'gestor');
     const col = S.swaps.filter((w) => w.status === 'colega');
-    const hist = S.swaps.filter((w) => w.status !== 'gestor' && w.status !== 'colega').slice(0, 60);
+    const ads = S.swaps.filter((w) => w.status === 'aberta');
+    const hist = S.swaps.filter((w) => !['gestor', 'colega', 'aberta'].includes(w.status)).slice(0, 60);
     return '<div class="section-h"><h2>Aguardando sua autorização</h2>' + (wait.length ? chip(String(wait.length), 'warn') : '') + '</div>' +
       (wait.length ? '<div class="list">' + wait.map((w) => '<div class="card item"><div class="main">' + swapLine(w) + '</div></div><div class="row" style="margin:-4px 0 6px;justify-content:flex-end"><button class="btn danger sm" data-act="decide" data-id="' + w.id + '" data-ok="0">Não autorizar</button><button class="btn ok sm" data-act="decide" data-id="' + w.id + '" data-ok="1">Autorizar</button></div>').join('') + '</div>' : empty('Nenhum pedido aguardando autorização.')) +
+      '<div class="section"><div class="section-h"><h2>Plantões anunciados à equipe</h2>' + (ads.length ? chip(String(ads.length), 'info') : '') + '</div>' + (ads.length ? '<div class="list">' + ads.map((w) => '<div class="card item"><div class="main">' + swapLine(w) + '</div>' + statusChip(w.status) + '</div>').join('') + '</div>' : empty('Nenhum anúncio aberto.')) + '</div>' +
       '<div class="section"><div class="section-h"><h2>Aguardando o colega</h2></div>' + (col.length ? '<div class="list">' + col.map((w) => '<div class="card item"><div class="main">' + swapLine(w) + '</div>' + statusChip(w.status) + '</div>').join('') + '</div>' : empty('Nenhum.')) + '</div>' +
       '<div class="section"><div class="section-h"><h2>Histórico</h2></div>' + (hist.length ? '<div class="list">' + hist.map((w) => '<div class="card item"><div class="main">' + swapLine(w) + '</div>' + statusChip(w.status) + '</div>').join('') + '</div>' : empty('Ainda não há trocas concluídas.')) + '</div>';
   }
@@ -553,14 +571,17 @@
   function viewTrocasPlant() {
     const me = S.me.id, now = new Date();
     const recv = S.swaps.filter((w) => w.status === 'colega' && w.to_doctor === me);
-    const mine = S.swaps.filter((w) => (w.status === 'colega' || w.status === 'gestor') && w.from_doctor === me);
+    const mine = S.swaps.filter((w) => ['aberta', 'colega', 'gestor'].includes(w.status) && w.from_doctor === me);
+    const ads = openAds();
     const accepted = S.swaps.filter((w) => w.status === 'gestor' && w.to_doctor === me);
-    const hist = S.swaps.filter((w) => !['colega', 'gestor'].includes(w.status) && (w.from_doctor === me || w.to_doctor === me)).slice(0, 30);
+    const hist = S.swaps.filter((w) => !['aberta', 'colega', 'gestor'].includes(w.status) && (w.from_doctor === me || w.to_doctor === me)).slice(0, 30);
     const fut = myShifts().filter((s) => shiftStart(s.id) > now).slice(0, 20);
-    return '<div class="section-h"><h2>Pedidos recebidos</h2>' + (recv.length ? chip(String(recv.length), 'bad') : '') + '</div>' +
-      (recv.length ? '<div class="list">' + recv.map((w) => '<div class="card"><div class="item"><div class="main">' + swapLine(w) + '</div></div><div class="row" style="justify-content:flex-end;margin-top:10px"><button class="btn danger sm" data-act="respond" data-id="' + w.id + '" data-ok="0">Recusar</button><button class="btn ok sm" data-act="respond" data-id="' + w.id + '" data-ok="1">Aceitar</button></div></div>').join('') + '</div>' : empty('Nenhum pedido recebido.')) +
+    return '<div class="section-h"><h2>Plantões anunciados</h2>' + (ads.filter((w) => !takeBlock(w)).length ? chip(String(ads.filter((w) => !takeBlock(w)).length), 'bad') : '') + '</div>' +
+      (ads.length ? '<div class="list">' + ads.map((w) => { const why = takeBlock(w); return '<div class="card"><div class="item"><div class="main">' + swapLine(w) + '</div></div><div class="row" style="justify-content:flex-end;margin-top:10px">' + (why ? '<span class="muted small">' + esc(why) + '</span>' : '<button class="btn ok sm" data-act="take" data-id="' + w.id + '">Quero este plantão</button>') + '</div></div>'; }).join('') + '</div>' : empty('Nenhum plantão anunciado pelos colegas.')) +
+      '<div class="section"><div class="section-h"><h2>Pedidos recebidos</h2>' + (recv.length ? chip(String(recv.length), 'bad') : '') + '</div>' +
+      (recv.length ? '<div class="list">' + recv.map((w) => '<div class="card"><div class="item"><div class="main">' + swapLine(w) + '</div></div><div class="row" style="justify-content:flex-end;margin-top:10px"><button class="btn danger sm" data-act="respond" data-id="' + w.id + '" data-ok="0">Recusar</button><button class="btn ok sm" data-act="respond" data-id="' + w.id + '" data-ok="1">Aceitar</button></div></div>').join('') + '</div>' : empty('Nenhum pedido recebido.')) + '</div>' +
       '<div class="section"><div class="section-h"><h2>Oferecer troca</h2></div>' + (fut.length ? '<div class="card"><div class="list">' + fut.map((s) => { const p = pendingSwapFor(s.id); return '<div class="item"><div class="main small"><b>' + esc(fmtDay(s.date)) + ' · ' + turnName(s.turn) + '</b><br><span class="muted">' + esc(unitFull(s.unit_id)) + '</span></div>' + (p ? chip('Troca em andamento', 'warn') : '<button class="btn sm" data-act="offer" data-id="' + s.id + '">Oferecer troca</button>') + '</div>'; }).join('<hr style="margin:0">') + '</div></div>' : empty('Você não tem plantões futuros na escala.')) + '</div>' +
-      '<div class="section"><div class="section-h"><h2>Meus pedidos</h2></div>' + (mine.length ? '<div class="list">' + mine.map((w) => '<div class="card"><div class="item"><div class="main">' + swapLine(w) + '</div>' + statusChip(w.status) + '</div><div class="row" style="justify-content:flex-end;margin-top:8px"><button class="btn sm danger" data-act="cancelSwap" data-id="' + w.id + '">Cancelar pedido</button></div></div>').join('') + '</div>' : empty('Nenhum pedido em andamento.')) + '</div>' +
+      '<div class="section"><div class="section-h"><h2>Meus pedidos</h2></div>' + (mine.length ? '<div class="list">' + mine.map((w) => '<div class="card"><div class="item"><div class="main">' + swapLine(w) + '</div>' + statusChip(w.status) + '</div><div class="row" style="justify-content:flex-end;margin-top:8px"><button class="btn sm danger" data-act="cancelSwap" data-id="' + w.id + '">' + (w.status === 'aberta' ? 'Cancelar anúncio' : 'Cancelar pedido') + '</button></div></div>').join('') + '</div>' : empty('Nenhum pedido em andamento.')) + '</div>' +
       '<div class="section"><div class="section-h"><h2>Trocas que aceitei</h2></div>' + (accepted.length ? '<div class="list">' + accepted.map((w) => '<div class="card item"><div class="main">' + swapLine(w) + '</div>' + statusChip(w.status) + '</div>').join('') + '</div>' : empty('Nenhuma aguardando o gestor.')) + '</div>' +
       (hist.length ? '<div class="section"><div class="section-h"><h2>Histórico</h2></div><div class="list">' + hist.map((w) => '<div class="card item"><div class="main">' + swapLine(w) + '</div>' + statusChip(w.status) + '</div>').join('') + '</div></div>' : '');
   }
@@ -852,9 +873,28 @@
     offer: (el) => openSwapModal(el.dataset.id),
     swTo: (el) => { if (el.classList.contains('dis')) return; const f = S.modal.form; f.to = el.dataset.doc; f.ret = null; refreshSwapModal(); },
     swType: (el) => { const f = S.modal.form; f.type = el.dataset.type; f.ret = null; refreshSwapModal(); },
+    swMode: (el) => { const f = S.modal.form; f.mode = el.dataset.mode; f.to = null; f.ret = null; f.type = 'repasse'; refreshSwapModal(); },
+    take: async (el) => {
+      const w = S.swaps.find((x) => x.id === el.dataset.id); if (!w) return;
+      const why = takeBlock(w); if (why) { toast(why + '.', 'bad'); return; }
+      if (!(await confirmBox('Assumir plantão', 'Você quer assumir este plantão? O pedido vai para o gestor autorizar; a escala só muda depois da autorização.<br><br>' + swapLine(w), 'Quero este plantão'))) return;
+      await busy(el, 'Enviando…', async () => {
+        await rpc('take_swap', { p_id: w.id }); await loadSwaps(); render(true);
+        toast('Pronto! Agora o gestor autoriza a troca. Você será avisado.', 'ok', 5000);
+      });
+    },
     swRet: (el) => { if (el.classList.contains('dis')) return; S.modal.form.ret = el.dataset.id; refreshSwapModal(); },
     swSend: async (el) => {
       const f = S.modal.form;
+      const ta = $('#sw-note'); if (ta) f.note = ta.value;
+      if (f.mode === 'todos') {
+        await busy(el, 'Anunciando…', async () => {
+          await rpc('announce_swap', { p_shift: f.shift, p_note: f.note || null });
+          await loadSwaps(); closeModal(); render(true);
+          toast('Plantão anunciado à equipe. Quem puder assumir vai pedir, e você autoriza ou não em seguida.', 'ok', 6000);
+        });
+        return;
+      }
       if (!f.to) { toast('Escolha o colega.', 'bad'); return; }
       if (f.type === 'permuta' && !f.ret) { toast('Escolha o plantão do colega que você assume.', 'bad'); return; }
       await busy(el, 'Enviando…', async () => {
@@ -871,7 +911,7 @@
     },
     cancelSwap: async (el) => {
       if (!(await confirmBox('Cancelar pedido', 'Desistir deste pedido de troca?', 'Cancelar pedido', true))) return;
-      await busy(el, null, async () => { await rpc('cancel_swap', { p_id: el.dataset.id }); await loadSwaps(); render(true); toast('Pedido cancelado.'); });
+      await busy(el, null, async () => { await rpc('cancel_swap', { p_id: el.dataset.id }); await loadSwaps(); render(true); toast('Cancelado.'); });
     },
     decide: async (el) => {
       const ok = el.dataset.ok === '1', w = S.swaps.find((x) => x.id === el.dataset.id);
@@ -958,7 +998,7 @@
     if (pendingSwapFor(shiftId)) { toast('Já existe uma troca em andamento para este plantão.', 'bad'); return; }
     if (shiftStart(shiftId) <= new Date()) { toast('Este plantão já começou.', 'bad'); return; }
     openModal('Oferecer troca', '');
-    S.modal.form = { shift: shiftId, to: null, type: 'repasse', ret: null, note: '' };
+    S.modal.form = { shift: shiftId, mode: 'colega', to: null, type: 'repasse', ret: null, note: '' };
     S.modal.refresh = refreshSwapModal;
     refreshSwapModal();
   }
@@ -982,10 +1022,18 @@
         return '<div class="opt' + (f.ret === s.id ? ' sel' : '') + (why ? ' dis' : '') + '" data-act="swRet" data-id="' + s.id + '"><div class="grow"><b>' + fmtDay(s.date) + ' · ' + turnName(s.turn) + '</b> <span class="muted small">' + esc(unitFull(s.unit_id)) + '</span>' + (why ? '<div class="tiny muted">' + esc(why) + '</div>' : '') + '</div></div>';
       }).join('') : '<div class="empty">Este colega não tem plantões futuros na escala.</div>') + '</div>';
     }
-    setModalBody('<div class="note" style="margin:0 0 12px"><b>Seu plantão:</b> ' + esc(shiftDesc(f.shift)) + '</div>' +
+    const modeSeg = '<div class="field"><label class="f">Como oferecer</label><div class="seg"><button data-act="swMode" data-mode="colega" class="' + (f.mode !== 'todos' ? 'on' : '') + '">Para um colega</button><button data-act="swMode" data-mode="todos" class="' + (f.mode === 'todos' ? 'on' : '') + '">Anunciar para todos</button></div></div>';
+    const note = '<div class="field"><label class="f" for="sw-note">Recado (opcional)</label><textarea class="input" id="sw-note" maxlength="280" placeholder="' + (f.mode === 'todos' ? 'Ex.: preciso deste dia livre, quem puder cobrir agradeço!' : 'Ex.: consegue cobrir? Te devo uma.') + '">' + esc(f.note) + '</textarea></div>';
+    if (f.mode === 'todos') {
+      const n = S.doctors.filter((d) => d.active && d.id !== S.me.id && worksAt(d.id, hid) && !whereElse(d.id, p.date, p.turn, p.unit)).length;
+      setModalBody('<div class="note" style="margin:0 0 12px"><b>Seu plantão:</b> ' + esc(shiftDesc(f.shift)) + '</div>' + modeSeg +
+        '<div class="note" style="margin:0 0 12px">O plantão fica disponível para <b>' + n + '</b> colega' + (n === 1 ? '' : 's') + ' que trabalha' + (n === 1 ? '' : 'm') + ' neste hospital e estão livres no turno. O primeiro que pedir assume, e o gestor autoriza ou não. Você continua escalado até a autorização e pode cancelar o anúncio a qualquer momento.</div>' +
+        note + '<div class="mf"><button class="btn" data-act="mclose">Cancelar</button><button class="btn primary" data-act="swSend">Anunciar plantão</button></div>');
+      return;
+    }
+    setModalBody('<div class="note" style="margin:0 0 12px"><b>Seu plantão:</b> ' + esc(shiftDesc(f.shift)) + '</div>' + modeSeg +
       '<div class="field"><label class="f">Tipo</label><div class="seg"><button data-act="swType" data-type="repasse" class="' + (f.type === 'repasse' ? 'on' : '') + '">Repasse</button><button data-act="swType" data-type="permuta" class="' + (f.type === 'permuta' ? 'on' : '') + '">Permuta</button></div><div class="hint">' + (f.type === 'repasse' ? 'O colega assume seu plantão.' : 'Cada um assume um plantão do outro.') + '</div></div>' +
-      '<div class="field"><label class="f">Colega</label>' + (list || '<div class="empty">Nenhum colega trabalha neste hospital.</div>') + '</div>' + ret +
-      '<div class="field"><label class="f" for="sw-note">Recado (opcional)</label><textarea class="input" id="sw-note" maxlength="280" placeholder="Ex.: consegue cobrir? Te devo uma.">' + esc(f.note) + '</textarea></div>' +
+      '<div class="field"><label class="f">Colega</label>' + (list || '<div class="empty">Nenhum colega trabalha neste hospital.</div>') + '</div>' + ret + note +
       '<div class="mf"><button class="btn" data-act="mclose">Cancelar</button><button class="btn primary" data-act="swSend">Enviar pedido</button></div>' +
       '<p class="hint">O colega precisa aceitar e o gestor autorizar. A escala só muda depois da autorização.</p>');
   }
