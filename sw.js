@@ -1,8 +1,8 @@
 /* Service worker do Plantão UTI.
    Arquivos do app: abre na hora a partir do cache e atualiza em segundo plano
    (a versão nova aparece na abertura seguinte). Supabase e fontes vão direto à rede.
-   Para forçar atualização imediata nos celulares, troque o nome do cache (v6 -> v7). */
-const CACHE = 'plantao-uti-v6';
+   Para forçar atualização imediata nos celulares, troque o nome do cache (v7 -> v8). */
+const CACHE = 'plantao-uti-v7';
 const SHELL = ['./', 'index.html', 'app.js', 'config.js', 'vendor/supabase.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png', 'icons/apple-touch-icon.png'];
 
@@ -10,7 +10,7 @@ self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', (e) => {
-  e.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+  e.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE && k !== 'plantao-nav').map((k) => caches.delete(k))))
     .then(() => self.clients.claim()));
 });
 self.addEventListener('fetch', (e) => {
@@ -38,8 +38,11 @@ self.addEventListener('push', (e) => {
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
   const url = new URL((e.notification.data && e.notification.data.url) || './', self.registration.scope).href;
-  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
-    for (const c of list) { if ('focus' in c) { if ('navigate' in c) c.navigate(url).catch(() => {}); return c.focus(); } }
+  e.waitUntil((async () => {
+    // guarda o destino: se o app abrir do zero, ele lê daqui (o iPhone às vezes ignora a URL)
+    try { const c = await caches.open('plantao-nav'); await c.put('nav', new Response(JSON.stringify({ url, at: Date.now() }))); } catch (x) { /* */ }
+    const list = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const cl of list) { cl.postMessage({ type: 'notif-open', url }); if ('focus' in cl) return cl.focus(); }
     return self.clients.openWindow(url);
-  }));
+  })());
 });

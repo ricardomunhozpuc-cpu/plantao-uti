@@ -74,7 +74,7 @@ Deno.serve(async (req) => {
       if (w) {
         const from: any = doc.get(w.from_doctor) || {}, to: any = doc.get(w.to_doctor) || {};
         const what = desc(w.shift_id) + (w.return_shift_id ? ` ⇄ ${desc(w.return_shift_id)}` : "");
-        const url = "./?tab=trocas", tag = `troca-${w.id}`;
+        const urlP = `./?tab=trocas&role=plantonista&swap=${w.id}`, urlG = `./?tab=trocas&role=gestor&swap=${w.id}`, tag = `troca-${w.id}`;
         const mgrs = managers.filter((m: string) => m !== w.from_doctor && m !== w.to_doctor);
         const started = shiftStart(tz, w.shift_id).getTime() <= Date.now();
         if (w.status === "aberta") {
@@ -90,21 +90,21 @@ Deno.serve(async (req) => {
           const busy = new Set((same || []).filter((x: any) => x.unit_id !== uid).map((x: any) => x.doctor_id));
           const elig = (doctors || []).filter((d: any) => d.active && d.id !== w.from_doctor && !managers.includes(d.id)
             && (!L.has(d.id) || L.get(d.id)!.has(hid)) && !busy.has(d.id)).map((d: any) => d.id);
-          await send(elig, { title: "Plantão disponível", body: `${short(from.name)} anunciou: ${what}. Toque para assumir.`, url, tag });
-          await send(mgrs, { title: "Plantão anunciado", body: `${short(from.name)} ofereceu para a equipe: ${what}`, url, tag: `${tag}-g` });
+          await send(elig, { title: "Plantão disponível", body: `${short(from.name)} anunciou: ${what}. Toque para assumir.`, url: urlP, tag });
+          await send(mgrs, { title: "Plantão anunciado", body: `${short(from.name)} ofereceu para a equipe: ${what}`, url: urlG, tag: `${tag}-g` });
         } else if (w.status === "colega") {
-          await send([w.to_doctor], { title: `${short(from.name)} pediu uma troca`, body: what, url, tag });
-          await send(mgrs, { title: "Nova proposta de troca", body: `${short(from.name)} → ${short(to.name)} (aguardando ${short(to.name)} aceitar): ${what}`, url, tag: `${tag}-g` });
+          await send([w.to_doctor], { title: `${short(from.name)} pediu uma troca`, body: what, url: urlP, tag });
+          await send(mgrs, { title: "Nova proposta de troca", body: `${short(from.name)} → ${short(to.name)} (aguardando ${short(to.name)} aceitar): ${what}`, url: urlG, tag: `${tag}-g` });
         } else if (w.status === "gestor") {
           const took = body.old_status === "aberta";
-          await send(mgrs, { title: "Troca aguardando autorização", body: took ? `${short(to.name)} assumiu o plantão anunciado por ${short(from.name)}: ${what}` : `${short(from.name)} → ${short(to.name)}: ${what}`, url, tag: `${tag}-g` });
-          await send([w.from_doctor], { title: took ? `${short(to.name)} quer assumir seu plantão` : `${short(to.name)} aceitou sua troca`, body: `Aguardando autorização do gestor. ${what}`, url, tag });
-        } else if (w.status === "recusada") await send([w.from_doctor], { title: `${short(to.name)} recusou a troca`, body: what, url, tag });
-        else if (w.status === "aprovada") await send([w.from_doctor, w.to_doctor], { title: "Troca autorizada", body: `A escala foi atualizada: ${what}`, url, tag });
-        else if (w.status === "negada") await send([w.from_doctor, w.to_doctor], { title: "Troca não autorizada", body: what, url, tag });
+          await send(mgrs, { title: "Troca aguardando autorização", body: took ? `${short(to.name)} assumiu o plantão anunciado por ${short(from.name)}: ${what}` : `${short(from.name)} → ${short(to.name)}: ${what}`, url: urlG, tag: `${tag}-g` });
+          await send([w.from_doctor], { title: took ? `${short(to.name)} quer assumir seu plantão` : `${short(to.name)} aceitou sua troca`, body: `Aguardando autorização do gestor. ${what}`, url: urlP, tag });
+        } else if (w.status === "recusada") await send([w.from_doctor], { title: `${short(to.name)} recusou a troca`, body: what, url: urlP, tag });
+        else if (w.status === "aprovada") await send([w.from_doctor, w.to_doctor], { title: "Troca autorizada", body: `A escala foi atualizada: ${what}`, url: urlP, tag });
+        else if (w.status === "negada") await send([w.from_doctor, w.to_doctor], { title: "Troca não autorizada", body: what, url: urlP, tag });
         else if (w.status === "cancelada" && body.old_status && !started) {
-          if (w.to_doctor) await send([w.to_doctor], { title: `${short(from.name)} cancelou o pedido de troca`, body: what, url, tag });
-          await send(mgrs, { title: body.old_status === "aberta" ? "Anúncio de plantão cancelado" : "Pedido de troca cancelado", body: `${short(from.name)}: ${what}`, url, tag: `${tag}-g` });
+          if (w.to_doctor) await send([w.to_doctor], { title: `${short(from.name)} cancelou o pedido de troca`, body: what, url: urlP, tag });
+          await send(mgrs, { title: body.old_status === "aberta" ? "Anúncio de plantão cancelado" : "Pedido de troca cancelado", body: `${short(from.name)}: ${what}`, url: urlG, tag: `${tag}-g` });
         }
       }
     } else if (body.job === "tick") {
@@ -119,14 +119,14 @@ Deno.serve(async (req) => {
         const a: any = A.get(`${s.id}|${s.doctor_id}`) || {};
         const k = `${s.id}|${s.doctor_id}`;
         if (!a.check_in && n >= t0 - early && n < t0 && await claim(`open|${k}`)) {
-          await send([s.doctor_id], { title: "Check-in liberado", body: `Seu plantão começa às ${hm(tz, new Date(t0))}: ${where(s.unit_id)}`, url: "./?tab=meu", tag: `in-${s.id}` });
+          await send([s.doctor_id], { title: "Check-in liberado", body: `Seu plantão começa às ${hm(tz, new Date(t0))}: ${where(s.unit_id)}`, url: "./?tab=meu&role=plantonista", tag: `in-${s.id}` });
         }
         if (!a.check_in && n >= t0 + tol && n < t1) {
-          if (await claim(`late|${k}`)) await send([s.doctor_id], { title: "Você ainda não fez check-in", body: `Plantão das ${hm(tz, new Date(t0))}: ${where(s.unit_id)}. Registre a entrada no app.`, url: "./?tab=meu", tag: `in-${s.id}` });
-          if (await claim(`uncov|${s.id}`)) await send(managers.filter((m: string) => m !== s.doctor_id), { title: "UTI sem check-in", body: `${where(s.unit_id)}: ${short(d.name)} não registrou entrada no plantão das ${hm(tz, new Date(t0))}.`, url: "./?tab=agora", tag: `uncov-${s.id}` });
+          if (await claim(`late|${k}`)) await send([s.doctor_id], { title: "Você ainda não fez check-in", body: `Plantão das ${hm(tz, new Date(t0))}: ${where(s.unit_id)}. Registre a entrada no app.`, url: "./?tab=meu&role=plantonista", tag: `in-${s.id}` });
+          if (await claim(`uncov|${s.id}`)) await send(managers.filter((m: string) => m !== s.doctor_id), { title: "UTI sem check-in", body: `${where(s.unit_id)}: ${short(d.name)} não registrou entrada no plantão das ${hm(tz, new Date(t0))}.`, url: "./?tab=agora&role=gestor", tag: `uncov-${s.id}` });
         }
         if (a.check_in && !a.check_out && n >= t1 && n < t1 + 6 * HOUR && await claim(`out|${k}`)) {
-          await send([s.doctor_id], { title: "Registre seu check-out", body: `O plantão terminou às ${hm(tz, new Date(t1))}: ${where(s.unit_id)}.`, url: "./?tab=meu", tag: `out-${s.id}` });
+          await send([s.doctor_id], { title: "Registre seu check-out", body: `O plantão terminou às ${hm(tz, new Date(t1))}: ${where(s.unit_id)}.`, url: "./?tab=meu&role=plantonista", tag: `out-${s.id}` });
         }
       }
     }

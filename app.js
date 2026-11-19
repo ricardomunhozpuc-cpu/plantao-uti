@@ -323,12 +323,9 @@
       if (!data.active) { showBlocked('inactive'); return; }
       S.role = data.is_manager ? 'gestor' : 'plantonista';
       S.tab = S.role === 'gestor' ? 'agora' : 'meu';
-      const qtab = new URLSearchParams(location.search).get('tab');
-      if (qtab) {
-        if (TABS[S.role].some((t) => t[0] === qtab)) S.tab = qtab;
-        else if (S.role === 'gestor' && TABS.plantonista.some((t) => t[0] === qtab)) { S.role = 'plantonista'; S.tab = qtab; }
-        history.replaceState(null, '', location.pathname);
-      }
+      const navUrl = /[?&]tab=/.test(location.search) ? location.href : null;
+      const cachedNav = await consumeNav();
+      if (navUrl) history.replaceState(null, '', location.pathname);
       const today = new Date();
       await Promise.all([loadStatic(), ensureRange(ymd(addDays(today, -35)), ymd(addDays(today, 70))), loadSwaps()]);
       S.pres = { from: ymd(addDays(today, -30)), to: ymd(today), doctor: '' };
@@ -336,12 +333,57 @@
       subscribe();
       clearInterval(S.tick);
       S.tick = setInterval(() => { if (S.tab === 'agora' || S.tab === 'meu') render(); }, 30000);
+      setNav(navUrl || cachedNav);
       render(true);
+      focusPending();
       refreshPushState(true);
       if (!hasPw() && !sessionStorage.getItem('plantao-pw-later')) setTimeout(() => { if (!S.modal) openPwModal(true); }, 700);
     } catch (e) {
       showFatal(errText(e), true);
     } finally { starting = false; }
+  }
+
+  /* ---------- destino vindo de uma notificação ---------- */
+  function setNav(urlStr) {
+    if (!urlStr) return false;
+    try {
+      const q = new URL(urlStr, location.href).searchParams, tab = q.get('tab'), role = q.get('role');
+      if (role === 'gestor' && isMgr()) S.role = 'gestor';
+      else if (role === 'plantonista') S.role = 'plantonista';
+      else if (tab && !TABS[S.role].some((t) => t[0] === tab) && isMgr()) S.role = S.role === 'gestor' ? 'plantonista' : 'gestor';
+      if (tab && TABS[S.role].some((t) => t[0] === tab)) S.tab = tab;
+      S.focusSwap = q.get('swap') || null;
+      return true;
+    } catch (e) { return false; }
+  }
+  async function consumeNav() {
+    try {
+      if (!('caches' in window)) return null;
+      const c = await caches.open('plantao-nav'), r = await c.match('nav');
+      if (!r) return null;
+      await c.delete('nav');
+      const d = await r.json();
+      return Date.now() - d.at < 3 * 60000 ? d.url : null;
+    } catch (e) { return null; }
+  }
+  function focusPending() {
+    const id = S.focusSwap; if (!id) return; S.focusSwap = null;
+    setTimeout(() => {
+      const el = document.querySelector('[data-swap="' + id + '"]');
+      if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 3200); }
+      else if (S.tab === 'trocas') {
+        const w = S.swaps.find((x) => x.id === id);
+        toast(w ? 'Este pedido já foi resolvido: ' + STATUS[w.status][0].toLowerCase() + '.' : 'Este pedido não está mais disponível.');
+      }
+    }, 120);
+  }
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', async (e) => {
+      if (!e.data || e.data.type !== 'notif-open' || !S.started) return;
+      await consumeNav();
+      try { await Promise.all([loadSwaps(), loadShifts(), loadAtt()]); } catch (x) { /* */ }
+      closeModal(); setNav(e.data.url); window.scrollTo(0, 0); render(true); focusPending();
+    });
   }
 
   function resetToLogin() {
@@ -562,10 +604,10 @@
     const ads = S.swaps.filter((w) => w.status === 'aberta');
     const hist = S.swaps.filter((w) => !['gestor', 'colega', 'aberta'].includes(w.status)).slice(0, 60);
     return '<div class="section-h"><h2>Aguardando sua autorização</h2>' + (wait.length ? chip(String(wait.length), 'warn') : '') + '</div>' +
-      (wait.length ? '<div class="list">' + wait.map((w) => '<div class="card item"><div class="main">' + swapLine(w) + '</div></div><div class="row" style="margin:-4px 0 6px;justify-content:flex-end"><button class="btn danger sm" data-act="decide" data-id="' + w.id + '" data-ok="0">Não autorizar</button><button class="btn ok sm" data-act="decide" data-id="' + w.id + '" data-ok="1">Autorizar</button></div>').join('') + '</div>' : empty('Nenhum pedido aguardando autorização.')) +
-      '<div class="section"><div class="section-h"><h2>Plantões anunciados à equipe</h2>' + (ads.length ? chip(String(ads.length), 'info') : '') + '</div>' + (ads.length ? '<div class="list">' + ads.map((w) => '<div class="card item"><div class="main">' + swapLine(w) + '</div>' + statusChip(w.status) + '</div>').join('') + '</div>' : empty('Nenhum anúncio aberto.')) + '</div>' +
-      '<div class="section"><div class="section-h"><h2>Aguardando o colega</h2></div>' + (col.length ? '<div class="list">' + col.map((w) => '<div class="card item"><div class="main">' + swapLine(w) + '</div>' + statusChip(w.status) + '</div>').join('') + '</div>' : empty('Nenhum.')) + '</div>' +
-      '<div class="section"><div class="section-h"><h2>Histórico</h2></div>' + (hist.length ? '<div class="list">' + hist.map((w) => '<div class="card item"><div class="main">' + swapLine(w) + '</div>' + statusChip(w.status) + '</div>').join('') + '</div>' : empty('Ainda não há trocas concluídas.')) + '</div>';
+      (wait.length ? '<div class="list">' + wait.map((w) => '<div class="card item" data-swap="' + w.id + '"><div class="main">' + swapLine(w) + '</div></div><div class="row" style="margin:-4px 0 6px;justify-content:flex-end"><button class="btn danger sm" data-act="decide" data-id="' + w.id + '" data-ok="0">Não autorizar</button><button class="btn ok sm" data-act="decide" data-id="' + w.id + '" data-ok="1">Autorizar</button></div>').join('') + '</div>' : empty('Nenhum pedido aguardando autorização.')) +
+      '<div class="section"><div class="section-h"><h2>Plantões anunciados à equipe</h2>' + (ads.length ? chip(String(ads.length), 'info') : '') + '</div>' + (ads.length ? '<div class="list">' + ads.map((w) => '<div class="card item" data-swap="' + w.id + '"><div class="main">' + swapLine(w) + '</div>' + statusChip(w.status) + '</div>').join('') + '</div>' : empty('Nenhum anúncio aberto.')) + '</div>' +
+      '<div class="section"><div class="section-h"><h2>Aguardando o colega</h2></div>' + (col.length ? '<div class="list">' + col.map((w) => '<div class="card item" data-swap="' + w.id + '"><div class="main">' + swapLine(w) + '</div>' + statusChip(w.status) + '</div>').join('') + '</div>' : empty('Nenhum.')) + '</div>' +
+      '<div class="section"><div class="section-h"><h2>Histórico</h2></div>' + (hist.length ? '<div class="list">' + hist.map((w) => '<div class="card item" data-swap="' + w.id + '"><div class="main">' + swapLine(w) + '</div>' + statusChip(w.status) + '</div>').join('') + '</div>' : empty('Ainda não há trocas concluídas.')) + '</div>';
   }
 
   function viewTrocasPlant() {
@@ -577,13 +619,13 @@
     const hist = S.swaps.filter((w) => !['aberta', 'colega', 'gestor'].includes(w.status) && (w.from_doctor === me || w.to_doctor === me)).slice(0, 30);
     const fut = myShifts().filter((s) => shiftStart(s.id) > now).slice(0, 20);
     return '<div class="section-h"><h2>Plantões anunciados</h2>' + (ads.filter((w) => !takeBlock(w)).length ? chip(String(ads.filter((w) => !takeBlock(w)).length), 'bad') : '') + '</div>' +
-      (ads.length ? '<div class="list">' + ads.map((w) => { const why = takeBlock(w); return '<div class="card"><div class="item"><div class="main">' + swapLine(w) + '</div></div><div class="row" style="justify-content:flex-end;margin-top:10px">' + (why ? '<span class="muted small">' + esc(why) + '</span>' : '<button class="btn ok sm" data-act="take" data-id="' + w.id + '">Quero este plantão</button>') + '</div></div>'; }).join('') + '</div>' : empty('Nenhum plantão anunciado pelos colegas.')) +
+      (ads.length ? '<div class="list">' + ads.map((w) => { const why = takeBlock(w); return '<div class="card" data-swap="' + w.id + '"><div class="item"><div class="main">' + swapLine(w) + '</div></div><div class="row" style="justify-content:flex-end;margin-top:10px">' + (why ? '<span class="muted small">' + esc(why) + '</span>' : '<button class="btn ok sm" data-act="take" data-id="' + w.id + '">Quero este plantão</button>') + '</div></div>'; }).join('') + '</div>' : empty('Nenhum plantão anunciado pelos colegas.')) +
       '<div class="section"><div class="section-h"><h2>Pedidos recebidos</h2>' + (recv.length ? chip(String(recv.length), 'bad') : '') + '</div>' +
-      (recv.length ? '<div class="list">' + recv.map((w) => '<div class="card"><div class="item"><div class="main">' + swapLine(w) + '</div></div><div class="row" style="justify-content:flex-end;margin-top:10px"><button class="btn danger sm" data-act="respond" data-id="' + w.id + '" data-ok="0">Recusar</button><button class="btn ok sm" data-act="respond" data-id="' + w.id + '" data-ok="1">Aceitar</button></div></div>').join('') + '</div>' : empty('Nenhum pedido recebido.')) + '</div>' +
+      (recv.length ? '<div class="list">' + recv.map((w) => '<div class="card" data-swap="' + w.id + '"><div class="item"><div class="main">' + swapLine(w) + '</div></div><div class="row" style="justify-content:flex-end;margin-top:10px"><button class="btn danger sm" data-act="respond" data-id="' + w.id + '" data-ok="0">Recusar</button><button class="btn ok sm" data-act="respond" data-id="' + w.id + '" data-ok="1">Aceitar</button></div></div>').join('') + '</div>' : empty('Nenhum pedido recebido.')) + '</div>' +
       '<div class="section"><div class="section-h"><h2>Oferecer troca</h2></div>' + (fut.length ? '<div class="card"><div class="list">' + fut.map((s) => { const p = pendingSwapFor(s.id); return '<div class="item"><div class="main small"><b>' + esc(fmtDay(s.date)) + ' · ' + turnName(s.turn) + '</b><br><span class="muted">' + esc(unitFull(s.unit_id)) + '</span></div>' + (p ? chip('Troca em andamento', 'warn') : '<button class="btn sm" data-act="offer" data-id="' + s.id + '">Oferecer troca</button>') + '</div>'; }).join('<hr style="margin:0">') + '</div></div>' : empty('Você não tem plantões futuros na escala.')) + '</div>' +
-      '<div class="section"><div class="section-h"><h2>Meus pedidos</h2></div>' + (mine.length ? '<div class="list">' + mine.map((w) => '<div class="card"><div class="item"><div class="main">' + swapLine(w) + '</div>' + statusChip(w.status) + '</div><div class="row" style="justify-content:flex-end;margin-top:8px"><button class="btn sm danger" data-act="cancelSwap" data-id="' + w.id + '">' + (w.status === 'aberta' ? 'Cancelar anúncio' : 'Cancelar pedido') + '</button></div></div>').join('') + '</div>' : empty('Nenhum pedido em andamento.')) + '</div>' +
-      '<div class="section"><div class="section-h"><h2>Trocas que aceitei</h2></div>' + (accepted.length ? '<div class="list">' + accepted.map((w) => '<div class="card item"><div class="main">' + swapLine(w) + '</div>' + statusChip(w.status) + '</div>').join('') + '</div>' : empty('Nenhuma aguardando o gestor.')) + '</div>' +
-      (hist.length ? '<div class="section"><div class="section-h"><h2>Histórico</h2></div><div class="list">' + hist.map((w) => '<div class="card item"><div class="main">' + swapLine(w) + '</div>' + statusChip(w.status) + '</div>').join('') + '</div></div>' : '');
+      '<div class="section"><div class="section-h"><h2>Meus pedidos</h2></div>' + (mine.length ? '<div class="list">' + mine.map((w) => '<div class="card" data-swap="' + w.id + '"><div class="item"><div class="main">' + swapLine(w) + '</div>' + statusChip(w.status) + '</div><div class="row" style="justify-content:flex-end;margin-top:8px"><button class="btn sm danger" data-act="cancelSwap" data-id="' + w.id + '">' + (w.status === 'aberta' ? 'Cancelar anúncio' : 'Cancelar pedido') + '</button></div></div>').join('') + '</div>' : empty('Nenhum pedido em andamento.')) + '</div>' +
+      '<div class="section"><div class="section-h"><h2>Trocas que aceitei</h2></div>' + (accepted.length ? '<div class="list">' + accepted.map((w) => '<div class="card item" data-swap="' + w.id + '"><div class="main">' + swapLine(w) + '</div>' + statusChip(w.status) + '</div>').join('') + '</div>' : empty('Nenhuma aguardando o gestor.')) + '</div>' +
+      (hist.length ? '<div class="section"><div class="section-h"><h2>Histórico</h2></div><div class="list">' + hist.map((w) => '<div class="card item" data-swap="' + w.id + '"><div class="main">' + swapLine(w) + '</div>' + statusChip(w.status) + '</div>').join('') + '</div></div>' : '');
   }
 
   /* ---------- Gestor · Presença ---------- */
