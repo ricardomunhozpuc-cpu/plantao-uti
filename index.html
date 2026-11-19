@@ -99,6 +99,12 @@ hr{border:0;border-top:1px solid var(--line);margin:12px 0}
 .btn.sm{padding:5px 10px;min-height:32px;font-size:.84rem}
 .btn.big{width:100%;min-height:62px;font-size:1.15rem;border-radius:14px}
 .btn.block{width:100%}
+.acct{display:flex;align-items:center;gap:8px;border:0;background:transparent;cursor:pointer;padding:4px;border-radius:999px;color:var(--text)}
+.acct:hover{background:var(--surface2)}
+.avatar{width:32px;height:32px;border-radius:50%;background:var(--brand);color:var(--brand-ink);display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:.9rem}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin:-2px 0 10px}
+.fchip{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:6px 12px;font-size:.84rem;cursor:pointer;color:var(--muted);min-height:34px}
+.fchip.on{background:var(--brand);border-color:var(--brand);color:var(--brand-ink);font-weight:700}
 .iconbtn{border:0;background:transparent;padding:8px;border-radius:10px;cursor:pointer;color:var(--muted);display:inline-flex}
 .iconbtn:hover{background:var(--surface2)}
 .iconbtn svg{width:20px;height:20px}
@@ -209,15 +215,15 @@ table.tbl{width:100%;border-collapse:collapse;font-size:.86rem}
 .opt .grow{flex:1;min-width:0}
 
 /* toast */
-#toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(var(--nav-h) + var(--safe-b) + 14px);z-index:60;display:flex;flex-direction:column;gap:8px;width:min(520px,92vw);pointer-events:none}
-.toast{background:var(--text);color:var(--bg);padding:12px 14px;border-radius:12px;box-shadow:0 6px 20px rgba(0,0,0,.25);font-size:.92rem;pointer-events:auto;animation:tin .18s ease-out}
+#toast{position:fixed;left:50%;transform:translateX(-50%);top:calc(env(safe-area-inset-top,0px) + 10px);z-index:60;display:flex;flex-direction:column;gap:8px;width:min(520px,92vw);pointer-events:none}
+.toast{background:var(--text);color:var(--bg);padding:12px 14px;border-radius:12px;box-shadow:0 6px 20px rgba(0,0,0,.25);font-size:.92rem;pointer-events:none;animation:tin .18s ease-out}
 .toast.bad{background:var(--bad);color:#fff}
 .toast.ok{background:var(--ok);color:#fff}
-@keyframes tin{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
-@media (min-width:860px){#toast{bottom:24px}}
+@keyframes tin{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}
+@media (min-width:860px){#toast{top:auto;bottom:24px}}
 .spinner{width:28px;height:28px;border:3px solid var(--line);border-top-color:var(--brand);border-radius:50%;animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
-@media (max-width:560px){.brand span,.who{display:none}.topbar{padding-left:12px;padding-right:8px}}
+@media (max-width:560px){.brand span,.acct .who{display:none}.topbar{padding-left:12px;padding-right:8px}}
 @media print{.tabs,.topbar,.no-print{display:none!important}main{padding:0}}
 </style>
 </head>

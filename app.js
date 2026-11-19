@@ -77,6 +77,10 @@
     if (/Failed to fetch|NetworkError|Load failed|network/i.test(m)) return 'Sem conexão com o servidor. Verifique a internet e tente de novo.';
     if (/rate limit|too many|over_email_send_rate/i.test(m)) return 'Muitas tentativas em pouco tempo. Aguarde alguns minutos e tente de novo.';
     if (/Token has expired|otp.*(expired|invalid)|invalid.*(token|otp)/i.test(m)) return 'Código inválido ou expirado. Confira os dígitos ou peça um novo código.';
+    if (/Invalid login credentials/i.test(m)) return 'E-mail ou senha incorretos. No primeiro acesso, ou se esqueceu a senha, use "Receber código por e-mail".';
+    if (/Password should be at least|weak.?password/i.test(m)) return 'A senha precisa ter pelo menos 8 caracteres.';
+    if (/should be different|same_password/i.test(m)) return 'A nova senha precisa ser diferente da atual.';
+    if (/Email not confirmed/i.test(m)) return 'E-mail ainda não confirmado. Use "Receber código por e-mail".';
     if (/Signups not allowed/i.test(m)) return 'O cadastro de novos acessos está desativado no servidor. Fale com a TI.';
     if (/JWT expired|invalid jwt/i.test(m)) return 'Sua sessão expirou. Saia e entre de novo.';
     if (/doctors_email_key|duplicate key.*email/i.test(m)) return 'Já existe um médico com este e-mail.';
@@ -102,7 +106,7 @@
   const S = {
     session: null, me: null, role: 'plantonista', tab: null, started: false,
     settings: { tolerance_min: 10, early_min: 60, tz: 'America/Sao_Paulo' },
-    hospitals: [], units: [], doctors: [],
+    hospitals: [], units: [], doctors: [], links: new Map(), pushSt: null,
     shifts: new Map(), att: new Map(), swaps: [],
     range: null, week: startOfWeek(new Date()),
     pres: null, login: { step: 'email', email: '', resendAt: 0 },
@@ -113,6 +117,20 @@
   const hospById = (id) => S.hospitals.find((h) => h.id === id);
   const hospOfUnit = (uid) => { const u = unitById(uid); return u ? hospById(u.hospital_id) : null; };
   const isMgr = () => !!(S.me && S.me.is_manager);
+  // Hospitais em que o médico trabalha (sem vínculo = todos)
+  const docHosps = (id) => S.links.get(id) || null;
+  const worksAt = (docId, hospId) => { const s = docHosps(docId); return !s || s.has(hospId); };
+  const unitHosp = (uid) => (unitById(uid) || {}).hospital_id;
+  const visibleHospitals = () => (S.role === 'gestor' ? S.hospitals : S.hospitals.filter((h) => worksAt(S.me.id, h.id)));
+  const filterKey = () => 'plantao-filtro-' + S.me.id + '-' + S.role;
+  function selectedHospitals() {
+    const vis = visibleHospitals(); let sel = null;
+    try { sel = JSON.parse(localStorage.getItem(filterKey()) || 'null'); } catch (e) { /* */ }
+    const out = Array.isArray(sel) ? vis.filter((h) => sel.includes(h.id)) : vis;
+    return out.length ? out : vis;
+  }
+  function setFilter(ids) { try { localStorage.setItem(filterKey(), JSON.stringify(ids)); } catch (e) { /* */ } }
+  const hasPw = () => !!(S.session && S.session.user && S.session.user.user_metadata && S.session.user.user_metadata.has_password);
   // Na escala, médico desativado (ou apagado) aparece como "Médico removido"
   const docScaleName = (id) => { const d = docById(id); return !d || !d.active ? 'Médico removido' : d.name; };
   const docHistName = (id) => { const d = docById(id); return !d ? 'Médico removido' : d.name + (d.active ? '' : ' (inativo)'); };
@@ -185,15 +203,17 @@
 
   /* ============================== data loading ============================= */
   async function loadStatic() {
-    const [st, hs, us, ds] = await Promise.all([
+    const [st, hs, us, ds, lk] = await Promise.all([
       sb.from('settings').select('*').eq('id', 1).maybeSingle(),
       sb.from('hospitals').select('*').order('sort').order('id'),
       sb.from('units').select('*').order('sort').order('id'),
-      fetchAll(() => sb.from('doctors').select('*').order('name'))
+      fetchAll(() => sb.from('doctors').select('*').order('name')),
+      fetchAll(() => sb.from('doctor_hospitals').select('*').order('doctor_id'))
     ]);
     if (st.error) throw st.error; if (hs.error) throw hs.error; if (us.error) throw us.error;
     if (st.data) S.settings = st.data;
     S.hospitals = hs.data || []; S.units = us.data || []; S.doctors = ds;
+    S.links = new Map(); lk.forEach((r) => { if (!S.links.has(r.doctor_id)) S.links.set(r.doctor_id, new Set()); S.links.get(r.doctor_id).add(r.hospital_id); });
     const me = docById(S.me.id); if (me) S.me = me;
   }
   async function loadShifts() {
@@ -237,8 +257,8 @@
       const t = new Set(rtPending); rtPending.clear();
       try {
         const jobs = [];
-        if (t.has('settings') || t.has('hospitals') || t.has('units') || t.has('doctors')) jobs.push(loadStatic());
-        if (t.has('shifts')) jobs.push(loadShifts());
+        if (t.has('settings') || t.has('hospitals') || t.has('units') || t.has('doctors') || t.has('doctor_hospitals')) jobs.push(loadStatic());
+        if (t.has('shifts') || t.has('doctor_hospitals')) jobs.push(loadShifts());
         if (t.has('attendance')) jobs.push(loadAtt());
         if (t.has('swaps')) jobs.push(loadSwaps());
         await Promise.all(jobs);
@@ -290,6 +310,12 @@
       if (!data.active) { showBlocked('inactive'); return; }
       S.role = data.is_manager ? 'gestor' : 'plantonista';
       S.tab = S.role === 'gestor' ? 'agora' : 'meu';
+      const qtab = new URLSearchParams(location.search).get('tab');
+      if (qtab) {
+        if (TABS[S.role].some((t) => t[0] === qtab)) S.tab = qtab;
+        else if (S.role === 'gestor' && TABS.plantonista.some((t) => t[0] === qtab)) { S.role = 'plantonista'; S.tab = qtab; }
+        history.replaceState(null, '', location.pathname);
+      }
       const today = new Date();
       await Promise.all([loadStatic(), ensureRange(ymd(addDays(today, -35)), ymd(addDays(today, 70))), loadSwaps()]);
       S.pres = { from: ymd(addDays(today, -30)), to: ymd(today), doctor: '' };
@@ -298,6 +324,8 @@
       clearInterval(S.tick);
       S.tick = setInterval(() => { if (S.tab === 'agora' || S.tab === 'meu') render(); }, 30000);
       render(true);
+      refreshPushState(true);
+      if (!hasPw() && !sessionStorage.getItem('plantao-pw-later')) setTimeout(() => { if (!S.modal) openPwModal(true); }, 700);
     } catch (e) {
       showFatal(errText(e), true);
     } finally { starting = false; }
@@ -312,6 +340,7 @@
     showLogin();
   }
   async function logout() {
+    try { await disablePush(true); } catch (e) { /* */ }
     try { await sb.auth.signOut(); } catch (e) { /* */ }
     resetToLogin();
   }
@@ -340,11 +369,15 @@
     const L = S.login;
     let body;
     if (L.step === 'email') {
-      body = '<form data-submit="sendCode" class="stack" novalidate>' +
+      body = '<form data-submit="loginPw" class="stack" novalidate>' +
         '<div class="field"><label class="f" for="lg-email">Seu e-mail</label>' +
-        '<input class="input" id="lg-email" type="email" inputmode="email" autocomplete="email" autocapitalize="off" spellcheck="false" required value="' + esc(L.email) + '" placeholder="nome@exemplo.com"></div>' +
-        '<button class="btn primary block" type="submit">Receber código de acesso</button>' +
-        '<p class="hint">Você vai receber um código por e-mail. Não é preciso senha.</p></form>';
+        '<input class="input" id="lg-email" type="email" inputmode="email" autocomplete="username" autocapitalize="off" spellcheck="false" required value="' + esc(L.email) + '" placeholder="nome@exemplo.com"></div>' +
+        '<div class="field"><label class="f" for="lg-pw">Senha</label>' +
+        '<input class="input" id="lg-pw" type="password" autocomplete="current-password" placeholder="Sua senha"></div>' +
+        '<button class="btn primary block" type="submit">Entrar</button>' +
+        '<div class="row" style="align-items:center;gap:10px;margin:2px 0"><hr style="flex:1;margin:0"><span class="muted tiny">ou</span><hr style="flex:1;margin:0"></div>' +
+        '<button class="btn block" type="button" data-act="loginCode">Receber código por e-mail</button>' +
+        '<p class="hint">Primeiro acesso ou esqueceu a senha? Use o código por e-mail. Depois de entrar, você pode criar sua senha.</p></form>';
     } else {
       const wait = Math.max(0, Math.ceil((L.resendAt - Date.now()) / 1000));
       body = '<form data-submit="verifyCode" class="stack" novalidate>' +
@@ -396,7 +429,7 @@
     setApp(
       '<header class="topbar"><div class="brand"><img src="icons/icon-192.png" alt=""><span>Plantão UTI</span></div><div class="spacer"></div>' +
       (isMgr() ? '<div class="seg" role="group" aria-label="Modo"><button data-act="role" data-role="gestor" class="' + (S.role === 'gestor' ? 'on' : '') + '">Gestor</button><button data-act="role" data-role="plantonista" class="' + (S.role === 'plantonista' ? 'on' : '') + '">Plantonista</button></div>' : '') +
-      '<div class="who">' + esc(shortName(S.me.name)) + '</div><button class="iconbtn" title="Sair" aria-label="Sair" data-act="logout">' + ICON.out + '</button></header>' +
+      '<button class="acct" data-act="account" title="Minha conta" aria-label="Minha conta"><span class="who">' + esc(shortName(S.me.name)) + '</span><span class="avatar">' + esc((shortName(S.me.name)[0] || '?').toUpperCase()) + '</span></button></header>' +
       '<nav class="tabs" aria-label="Seções">' + tabs.map((t) => '<button data-act="tab" data-tab="' + t[0] + '" class="' + (S.tab === t[0] ? 'on' : '') + '">' + ICON[t[0]] + '<span>' + t[1] + '</span>' + (t[0] === 'trocas' && badge ? '<span class="badge">' + badge + '</span>' : '') + '</button>').join('') + '</nav>' +
       '<main id="view">' + body + '</main>'
     );
@@ -434,7 +467,7 @@
           '<div class="sub">Próximo (' + turnName(next.turn).toLowerCase() + ' ' + fmtDM(next.date) + '): ' + (ndoc ? esc(docScaleName(ndoc)) : '<i>sem escala</i>') + '</div></div>';
       }).join('') + '</div>';
     }).join('');
-    return '<div class="card"><div class="row between"><div><div class="clock">' + fmtHM(now) + '</div><div class="muted">' + fmtDay(ymd(now)) + '</div></div>' +
+    return pushBanner() + '<div class="card"><div class="row between"><div><div class="clock">' + fmtHM(now) + '</div><div class="muted">' + fmtDay(ymd(now)) + '</div></div>' +
       '<div style="text-align:right"><div class="kpi">' + present + ' de ' + S.units.length + '</div><div class="muted small">UTIs com plantonista presente</div></div></div>' +
       '<div class="row between small" style="margin-top:10px"><b>' + turnName(slot.turn) + ' ' + fmtDM(slot.date) + ' · ' + turnHours(slot.turn) + '</b><span class="muted">' + Math.round(pct) + '%</span></div>' +
       '<div class="progress"><i style="width:' + pct.toFixed(1) + '%"></i></div></div>' + cards +
@@ -457,7 +490,7 @@
       S.units.forEach((u) => { const doc = docOf(sid(d, t, u.id)); if (doc) { if (seen[doc]) { conflict.add(sid(d, t, u.id)); conflict.add(seen[doc]); } else seen[doc] = sid(d, t, u.id); } });
     }));
     let rows = '';
-    S.hospitals.forEach((h) => {
+    selectedHospitals().forEach((h) => {
       const us = S.units.filter((u) => u.hospital_id === h.id); if (!us.length) return;
       rows += '<tr class="hrow"><td colspan="9">' + esc(h.name) + '</td></tr>';
       us.forEach((u) => ['D', 'N'].forEach((t, ti) => {
@@ -478,10 +511,18 @@
       }));
     });
     return '<div class="section-h"><div class="weeknav"><button class="btn sm" data-act="week" data-d="-7" aria-label="Semana anterior">‹</button><span class="lbl">' + weekLabel(ws) + '</span><button class="btn sm" data-act="week" data-d="7" aria-label="Próxima semana">›</button><button class="btn sm ghost" data-act="week" data-d="0">Hoje</button></div>' +
-      (mgr ? '<button class="btn sm" data-act="repeatWeek">Repetir semana anterior nos vazios</button>' : '') + '</div>' +
+      '<div class="row" style="gap:6px">' + (mgr ? '<button class="btn sm" data-act="pdfOpen">PDF do mês</button><button class="btn sm" data-act="repeatWeek">Repetir semana anterior nos vazios</button>' : '') + '</div></div>' +
+      filterChips() +
       '<div class="scroll-x"><table class="sched"><thead><tr><th class="uh" style="z-index:3">UTI</th><th></th>' +
       days.map((d) => '<th class="' + (d === today ? 'today' : '') + '">' + fmtDay(d) + '</th>').join('') + '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
       '<div class="legend"><span>D = diurno 7h–19h · N = noturno 19h–7h</span><span><i style="background:var(--brand-soft)"></i>' + (mgr ? 'Seus plantões' : 'Seus plantões (toque para oferecer troca)') + '</span><span><i style="background:var(--bad-soft)"></i>Conflito</span><span><i style="box-shadow:inset 0 0 0 2px var(--warn)"></i>Troca em andamento</span></div>';
+  }
+
+  function filterChips() {
+    const vis = visibleHospitals(); if (vis.length < 2) return '';
+    const sel = new Set(selectedHospitals().map((h) => h.id)), all = sel.size === vis.length;
+    return '<div class="chips no-print" role="group" aria-label="Escalas exibidas"><button class="fchip' + (all ? ' on' : '') + '" data-act="fAll">Todas</button>' +
+      vis.map((h) => '<button class="fchip' + (!all && sel.has(h.id) ? ' on' : '') + '" data-act="fToggle" data-id="' + h.id + '">' + esc(h.name) + '</button>').join('') + '</div>';
   }
 
   /* ---------- Trocas (descrição) ---------- */
@@ -572,6 +613,7 @@
     return '<div class="section-h"><h2>Equipe <span class="muted small">(' + S.doctors.filter((d) => d.active).length + ' ativos)</span></h2><button class="btn primary sm" data-act="docEdit">+ Novo médico</button></div>' +
       (list.length ? '<div class="list">' + list.map((d) => '<div class="card item" ' + (d.active ? '' : 'style="opacity:.65"') + '><div class="main"><div class="title">' + esc(d.name) + (d.id === S.me.id ? ' <span class="muted small">(você)</span>' : '') + '</div>' +
         '<div class="small muted">' + esc(d.email) + (d.crm ? ' · CRM ' + esc(d.crm) : '') + (d.phone ? ' · ' + esc(d.phone) : '') + '</div>' +
+        '<div class="small" style="margin-top:4px">' + (docHosps(d.id) ? esc(S.hospitals.filter((h) => docHosps(d.id).has(h.id)).map((h) => h.name).join(', ')) : '<span class="muted">Todos os hospitais</span>') + '</div>' +
         '<div class="row" style="margin-top:6px;gap:6px">' + (d.is_manager ? chip('Gestor', 'brand') : '') + (d.active ? '' : chip('Inativo', 'bad')) + (d.user_id ? chip('Já entrou no app', 'ok') : chip('Ainda não entrou', '')) + '</div></div>' +
         '<div class="actions"><button class="btn sm" data-act="docEdit" data-id="' + d.id + '">Editar</button></div></div>').join('') + '</div>' : empty('Nenhum médico cadastrado.')) +
       '<p class="muted tiny" style="margin-top:12px">O médico entra com o mesmo e-mail cadastrado aqui. Só quem já entrou no app pode receber pedidos de troca. Para remover alguém, desative o cadastro: o histórico de presença é preservado.</p>';
@@ -641,7 +683,7 @@
     }
     const fut = mine.filter((s) => shiftStart(s.id) > now && !cards.some((c) => c.id === s.id)).slice(0, 12);
     const recent = [...S.att.values()].filter((a) => a.doctor_id === S.me.id && (a.check_in || a.check_out)).sort((a, b) => shiftStart(b.shift_id) - shiftStart(a.shift_id)).slice(0, 8);
-    return '<div class="stack">' + hero + '</div>' +
+    return pushBanner() + '<div class="stack">' + hero + '</div>' +
       '<div class="section"><div class="section-h"><h2>Próximos plantões</h2></div>' + (fut.length ? '<div class="card"><div class="list">' + fut.map((s) => { const p = pendingSwapFor(s.id); return '<div class="item"><div class="main small"><b>' + esc(fmtDay(s.date)) + ' · ' + turnName(s.turn) + ' ' + turnHours(s.turn) + '</b><br><span class="muted">' + esc(unitFull(s.unit_id)) + '</span></div>' + (p ? chip('Troca em andamento', 'warn') : '<button class="btn sm" data-act="offer" data-id="' + s.id + '">Oferecer troca</button>') + '</div>'; }).join('<hr style="margin:0">') + '</div></div>' : empty('Nenhum plantão futuro na escala.')) + '</div>' +
       '<div class="section"><div class="section-h"><h2>Últimos registros</h2></div>' + (recent.length ? '<div class="card"><div class="list">' + recent.map((a) => { const c = classify(a.shift_id, a.doctor_id, now), p = parseSid(a.shift_id); return '<div class="item"><div class="main small"><b>' + fmtDay(p.date) + ' · ' + turnName(p.turn) + '</b> · ' + esc(unitName(p.unit)) + '<br><span class="muted">Entrada ' + (a.check_in ? fmtHM(a.check_in) : '—') + ' · Saída ' + (a.check_out ? fmtDT(a.check_out) : '—') + '</span></div><div class="actions">' + c.tags.map((t) => chip(t[0], t[1])).join('') + '</div></div>'; }).join('<hr style="margin:0">') + '</div></div>' : empty('Nenhum registro ainda.')) + '</div>';
   }
@@ -717,6 +759,34 @@
 
   const A = {
     reload: () => location.reload(),
+    account: () => openAccount(),
+    pwOpen: () => openPwModal(false),
+    pwLater: () => { try { sessionStorage.setItem('plantao-pw-later', '1'); } catch (e) { /* */ } closeModal(); },
+    loginCode: (el) => {
+      const email = ($('#lg-email').value || '').trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { toast('Digite seu e-mail primeiro.', 'bad'); return; }
+      S.login.email = email;
+      return busy(el, 'Enviando…', async () => { await sendOtp(email); S.login.step = 'code'; showLogin(); });
+    },
+    pushOn: (el) => busy(el, 'Ativando…', async () => { await enablePush(); await rpc('send_test_push'); toast('Notificações ativadas. Enviamos um teste.', 'ok', 5000); await refreshPushState(); renderPushBox(); }),
+    pushOff: (el) => busy(el, 'Desativando…', async () => { await disablePush(false); await refreshPushState(); renderPushBox(); toast('Notificações desativadas neste aparelho.'); }),
+    pushTest: (el) => busy(el, 'Enviando…', async () => { await rpc('send_test_push'); toast('Teste enviado. Deve chegar em alguns segundos.', 'ok'); }),
+    pushDismiss: () => { try { localStorage.setItem('plantao-push-dismiss', String(Date.now())); } catch (e) { /* */ } render(true); },
+    fAll: () => { setFilter(visibleHospitals().map((h) => h.id)); render(true); },
+    fToggle: (el) => {
+      const vis = visibleHospitals().map((h) => h.id), cur = selectedHospitals().map((h) => h.id), id = el.dataset.id;
+      let next = cur.length === vis.length ? [id] : (cur.includes(id) ? cur.filter((x) => x !== id) : cur.concat(id));
+      if (!next.length) next = vis;
+      setFilter(next); render(true);
+    },
+    pdfOpen: () => openPdfModal(),
+    pdfGo: (el) => {
+      const from = $('#pdf-from').value, to = $('#pdf-to').value, hs = [...document.querySelectorAll('[name=pdf-h]:checked')].map((i) => i.value);
+      if (!from || !to || from > to) { toast('Confira as datas.', 'bad'); return; }
+      if (parseYmd(to) - parseYmd(from) > 370 * DAY) { toast('O período máximo é de 12 meses.', 'bad'); return; }
+      if (!hs.length) { toast('Escolha ao menos um hospital.', 'bad'); return; }
+      return busy(el, 'Gerando…', async () => { await generatePdf(from, to, hs); closeModal(); toast('PDF gerado.', 'ok'); });
+    },
     logout: () => logout(),
     mclose: () => closeModal(),
     mok: () => { if (S.modal && S.modal.ok) S.modal.ok(); },
@@ -857,12 +927,14 @@
   /* ---------- modais ---------- */
   function openCellModal(id) {
     const p = parseSid(id), cur = docOf(id), a = cur ? attOf(id, cur) : null, pend = pendingSwapFor(id);
-    const docs = S.doctors.filter((d) => d.active).sort((x, y) => x.name.localeCompare(y.name));
+    const hid = unitHosp(p.unit);
+    const docs = S.doctors.filter((d) => d.active).sort((x, y) => (worksAt(y.id, hid) - worksAt(x.id, hid)) || x.name.localeCompare(y.name));
     const opts = (filter) => '<div class="opt' + (!cur ? ' sel' : '') + '" data-act="pickDoc" data-doc=""><div class="grow"><b>Sem escala</b></div></div>' + docs.filter((d) => !filter || d.name.toLowerCase().includes(filter) || (d.crm || '').includes(filter)).map((d) => {
       const other = whereElse(d.id, p.date, p.turn, p.unit);
       const adj = [slotMove(p, -1), slotMove(p, 1)].some((s) => S.units.some((u) => docOf(sid(s.date, s.turn, u.id)) === d.id));
       return '<div class="opt' + (d.id === cur ? ' sel' : '') + '" data-act="pickDoc" data-doc="' + d.id + '"><div class="grow"><b>' + esc(d.name) + '</b>' + (d.crm ? ' <span class="muted small">CRM ' + esc(d.crm) + '</span>' : '') +
-        (other ? '<div class="small" style="color:var(--bad)">Já está na ' + esc(unitName(other)) + ' neste turno (vai gerar conflito)</div>' : '') + (adj && !other ? '<div class="tiny muted">Emenda com turno vizinho (24 h)</div>' : '') + '</div></div>';
+        (other ? '<div class="small" style="color:var(--bad)">Já está na ' + esc(unitName(other)) + ' neste turno (vai gerar conflito)</div>' : '') +
+        (!worksAt(d.id, hid) ? '<div class="tiny" style="color:var(--warn)">Não está vinculado a este hospital</div>' : '') + (adj && !other ? '<div class="tiny muted">Emenda com turno vizinho (24 h)</div>' : '') + '</div></div>';
     }).join('');
     openModal(turnName(p.turn) + ' · ' + fmtDay(p.date), '<p class="muted small" style="margin-top:-6px">' + esc(unitFull(p.unit)) + ' · ' + turnHours(p.turn) + '</p>' +
       (a && a.check_in ? '<div class="note" style="margin-bottom:10px">' + esc(docHistName(cur)) + ' já fez check-in neste plantão. Trocar o médico agora não apaga esse registro.</div>' : '') +
@@ -884,7 +956,8 @@
     const M = S.modal; if (!M || !M.form) return;
     const f = M.form, p = parseSid(f.shift), now = new Date();
     const ta = $('#sw-note'); if (ta) f.note = ta.value;
-    const colleagues = S.doctors.filter((d) => d.active && d.id !== S.me.id).sort((a, b) => a.name.localeCompare(b.name));
+    const hid = unitHosp(p.unit);
+    const colleagues = S.doctors.filter((d) => d.active && d.id !== S.me.id && worksAt(d.id, hid)).sort((a, b) => a.name.localeCompare(b.name));
     const list = colleagues.map((d) => {
       const other = whereElse(d.id, p.date, p.turn, p.unit);
       const why = !d.user_id ? 'Ainda não entrou no app' : other ? 'Já está na ' + unitName(other) + ' neste turno' : '';
@@ -895,13 +968,13 @@
       const theirs = [...S.shifts.values()].filter((s) => s.doctor_id === f.to && shiftStart(s.id) > now).sort((a, b) => shiftStart(a.id) - shiftStart(b.id)).slice(0, 40);
       ret = '<div class="field"><label class="f">Plantão do colega que você assume</label>' + (theirs.length ? theirs.map((s) => {
         const same = s.date === p.date && s.turn === p.turn, other = whereElse(S.me.id, s.date, s.turn, s.unit_id), pend = pendingSwapFor(s.id);
-        const why = same ? 'Mesmo turno do seu plantão' : other ? 'Você já está na ' + unitName(other) + ' neste turno' : pend ? 'Troca em andamento' : '';
+        const why = same ? 'Mesmo turno do seu plantão' : !worksAt(S.me.id, unitHosp(s.unit_id)) ? 'Você não trabalha neste hospital' : other ? 'Você já está na ' + unitName(other) + ' neste turno' : pend ? 'Troca em andamento' : '';
         return '<div class="opt' + (f.ret === s.id ? ' sel' : '') + (why ? ' dis' : '') + '" data-act="swRet" data-id="' + s.id + '"><div class="grow"><b>' + fmtDay(s.date) + ' · ' + turnName(s.turn) + '</b> <span class="muted small">' + esc(unitFull(s.unit_id)) + '</span>' + (why ? '<div class="tiny muted">' + esc(why) + '</div>' : '') + '</div></div>';
       }).join('') : '<div class="empty">Este colega não tem plantões futuros na escala.</div>') + '</div>';
     }
     setModalBody('<div class="note" style="margin:0 0 12px"><b>Seu plantão:</b> ' + esc(shiftDesc(f.shift)) + '</div>' +
       '<div class="field"><label class="f">Tipo</label><div class="seg"><button data-act="swType" data-type="repasse" class="' + (f.type === 'repasse' ? 'on' : '') + '">Repasse</button><button data-act="swType" data-type="permuta" class="' + (f.type === 'permuta' ? 'on' : '') + '">Permuta</button></div><div class="hint">' + (f.type === 'repasse' ? 'O colega assume seu plantão.' : 'Cada um assume um plantão do outro.') + '</div></div>' +
-      '<div class="field"><label class="f">Colega</label>' + (list || '<div class="empty">Nenhum colega disponível.</div>') + '</div>' + ret +
+      '<div class="field"><label class="f">Colega</label>' + (list || '<div class="empty">Nenhum colega trabalha neste hospital.</div>') + '</div>' + ret +
       '<div class="field"><label class="f" for="sw-note">Recado (opcional)</label><textarea class="input" id="sw-note" maxlength="280" placeholder="Ex.: consegue cobrir? Te devo uma.">' + esc(f.note) + '</textarea></div>' +
       '<div class="mf"><button class="btn" data-act="mclose">Cancelar</button><button class="btn primary" data-act="swSend">Enviar pedido</button></div>' +
       '<p class="hint">O colega precisa aceitar e o gestor autorizar. A escala só muda depois da autorização.</p>');
@@ -927,9 +1000,181 @@
       '<div><label class="f" for="d-phone">Telefone</label><input class="input" id="d-phone" name="phone" type="tel" maxlength="30" value="' + esc(d.phone || '') + '"></div></div>' +
       '<div class="field" style="margin-top:14px"><label class="check"><input type="checkbox" name="active" ' + (d.active ? 'checked' : '') + (self ? ' disabled' : '') + '> Ativo (pode entrar no app)</label></div>' +
       '<div class="field"><label class="check"><input type="checkbox" name="is_manager" ' + (d.is_manager ? 'checked' : '') + (self ? ' disabled' : '') + '> Gestor (monta a escala e autoriza trocas)</label>' + (self ? '<div class="hint">Você não pode desativar a si mesmo nem tirar o próprio papel de gestor.</div>' : '') + '</div>' +
+      '<div class="field" style="margin-top:14px"><label class="f">Hospitais em que trabalha</label>' + S.hospitals.map((h) => '<label class="check" style="margin:6px 0"><input type="checkbox" name="hosp" value="' + h.id + '"' + (id && docHosps(id) && docHosps(id).has(h.id) ? ' checked' : '') + '> ' + esc(h.name) + '</label>').join('') +
+        '<div class="hint">Nenhum marcado = trabalha em todos. O plantonista vê só a escala desses hospitais e só troca com colegas que trabalham neles.</div></div>' +
       (id ? '<div class="small muted" style="margin-top:10px">' + (d.user_id ? 'Já entrou no app.' : 'Ainda não entrou no app.') + '</div>' : '') +
       '<div class="mf">' + (id && d.user_id && !self ? '<button type="button" class="btn danger" data-act="docUnlink" data-id="' + id + '" style="margin-right:auto">Desvincular login</button>' : '') +
       '<button type="button" class="btn" data-act="mclose">Cancelar</button><button class="btn primary" type="submit">Salvar</button></div></form>');
+  }
+
+  /* ---------- conta e senha ---------- */
+  function openPwModal(first) {
+    openModal(first ? 'Crie sua senha' : (hasPw() ? 'Trocar senha' : 'Criar senha'), '<form data-submit="savePw" novalidate>' +
+      (first ? '<p class="small" style="margin-top:-4px">Com uma senha você entra direto, sem esperar o código por e-mail. O código continua valendo se esquecer a senha.</p>' : '') +
+      '<input type="email" autocomplete="username" value="' + esc((S.session && S.session.user && S.session.user.email) || S.me.email) + '" style="display:none" readonly>' +
+      '<div class="field"><label class="f" for="pw1">Nova senha</label><input class="input" id="pw1" type="password" autocomplete="new-password" minlength="8" required autofocus></div>' +
+      '<div class="field"><label class="f" for="pw2">Repita a senha</label><input class="input" id="pw2" type="password" autocomplete="new-password" minlength="8" required></div>' +
+      '<div class="hint">Mínimo de 8 caracteres.</div>' +
+      '<div class="mf">' + (first ? '<button type="button" class="btn" data-act="pwLater">Agora não</button>' : '<button type="button" class="btn" data-act="mclose">Cancelar</button>') +
+      '<button class="btn primary" type="submit">Salvar senha</button></div></form>');
+  }
+  function openAccount() {
+    const u = (S.session && S.session.user) || {};
+    openModal('Minha conta', '<p style="margin-top:-4px"><b>' + esc(S.me.name) + '</b><br><span class="muted small">' + esc(u.email || S.me.email) + '</span></p>' +
+      '<div class="card" style="box-shadow:none"><h3>Notificações neste aparelho</h3><div id="push-box" class="small" style="margin-top:8px">Verificando…</div></div>' +
+      '<div class="card" style="box-shadow:none;margin-top:10px"><h3>Senha</h3><p class="small muted" style="margin:6px 0 10px">' + (hasPw() ? 'Você já tem senha e pode trocá-la quando quiser.' : 'Crie uma senha para entrar sem esperar o código por e-mail.') + '</p><button class="btn sm" data-act="pwOpen">' + (hasPw() ? 'Trocar senha' : 'Criar senha') + '</button></div>' +
+      '<div class="mf"><button class="btn danger" data-act="logout">' + ICON.out + ' Sair da conta</button></div>');
+    renderPushBox();
+  }
+
+  /* ---------- notificações push ---------- */
+  const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const isStandalone = () => (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+  const pushSupported = () => window.isSecureContext && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window && !!CFG.vapidPublicKey;
+  function b64uToU8(s) { const b = atob((s + '='.repeat((4 - s.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(b, (c) => c.charCodeAt(0)); }
+  async function pushState() {
+    if (!pushSupported()) return isIOS() && !isStandalone() ? 'ios-install' : 'unsupported';
+    if (Notification.permission === 'denied') return 'denied';
+    const reg = await navigator.serviceWorker.getRegistration();
+    const sub = reg && await reg.pushManager.getSubscription();
+    return sub && Notification.permission === 'granted' ? 'on' : 'off';
+  }
+  async function refreshPushState(atStart) {
+    try {
+      S.pushSt = await pushState();
+      // mantém o vínculo do aparelho com o médico logado
+      if (atStart && S.pushSt === 'on') {
+        const reg = await navigator.serviceWorker.getRegistration(), sub = reg && await reg.pushManager.getSubscription();
+        if (sub) { const j = sub.toJSON(); await rpc('save_push_subscription', { p_endpoint: j.endpoint, p_p256dh: j.keys.p256dh, p_auth: j.keys.auth, p_ua: navigator.userAgent }); }
+      }
+    } catch (e) { S.pushSt = 'unsupported'; }
+    if (atStart && (S.tab === 'agora' || S.tab === 'meu')) render();
+  }
+  async function enablePush() {
+    if (!pushSupported()) throw new Error(isIOS() && !isStandalone() ? 'No iPhone, instale o app na tela inicial (Compartilhar > Adicionar à Tela de Início) e ative as notificações por lá.' : 'Este navegador não oferece notificações.');
+    if (Notification.permission !== 'granted') {
+      const p = await Notification.requestPermission();
+      if (p !== 'granted') throw new Error('As notificações não foram permitidas. Libere nas configurações do celular (Ajustes > Notificações) e tente de novo.');
+    }
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uToU8(CFG.vapidPublicKey) });
+    const j = sub.toJSON();
+    await rpc('save_push_subscription', { p_endpoint: j.endpoint, p_p256dh: j.keys.p256dh, p_auth: j.keys.auth, p_ua: navigator.userAgent });
+  }
+  async function disablePush(keepBrowserSub) {
+    if (!('serviceWorker' in navigator)) return;
+    const reg = await navigator.serviceWorker.getRegistration(), sub = reg && reg.pushManager && await reg.pushManager.getSubscription();
+    if (!sub) return;
+    try { await rpc('delete_push_subscription', { p_endpoint: sub.endpoint }); } catch (e) { /* */ }
+    if (!keepBrowserSub) await sub.unsubscribe();
+  }
+  async function renderPushBox() {
+    const box = $('#push-box'); if (!box) return;
+    const st = await pushState().catch(() => 'unsupported'); S.pushSt = st;
+    const html = {
+      on: '<div class="row between"><span>' + chip('Ativadas', 'ok') + '</span><span class="row" style="gap:6px"><button class="btn sm" data-act="pushTest">Enviar teste</button><button class="btn sm" data-act="pushOff">Desativar</button></span></div><p class="hint">Avisos de trocas, lembretes de check-in e check-out' + (isMgr() ? ' e alertas de UTI sem check-in' : '') + '.</p>',
+      off: '<p class="muted" style="margin:0 0 8px">Desativadas neste aparelho.</p><button class="btn primary sm" data-act="pushOn">Ativar notificações</button>',
+      denied: '<p style="margin:0">' + chip('Bloqueadas', 'bad') + '</p><p class="hint">Libere nas configurações: no iPhone, Ajustes > Notificações > Plantão UTI; no Android, toque no cadeado ao lado do endereço > Permissões > Notificações.</p>',
+      'ios-install': '<p style="margin:0">No iPhone, as notificações só funcionam com o app instalado: no Safari, toque em <b>Compartilhar</b> > <b>Adicionar à Tela de Início</b> e abra o app pelo ícone. Precisa do iOS 16.4 ou mais novo.</p>',
+      unsupported: '<p class="muted" style="margin:0">Este navegador não oferece notificações. No Android use o Chrome; no iPhone, o app instalado na tela inicial.</p>'
+    }[st];
+    box.innerHTML = html;
+  }
+  function pushBanner() {
+    const st = S.pushSt;
+    if (st !== 'off' && st !== 'ios-install') return '';
+    let t = 0; try { t = +localStorage.getItem('plantao-push-dismiss') || 0; } catch (e) { /* */ }
+    if (Date.now() - t < 14 * DAY) return '';
+    return '<div class="card no-print" style="margin-bottom:12px;border-color:var(--brand)"><div class="row between"><div class="small" style="flex:1;min-width:200px"><b>Receba avisos no celular</b><br><span class="muted">' +
+      (st === 'ios-install' ? 'No iPhone: Compartilhar > Adicionar à Tela de Início, depois abra o app pelo ícone e ative aqui.' : 'Pedidos de troca, lembretes de check-in e check-out' + (S.role === 'gestor' ? ' e UTIs sem check-in' : '') + '.') +
+      '</span></div><div class="row" style="gap:6px">' + (st === 'off' ? '<button class="btn primary sm" data-act="pushOn">Ativar</button>' : '') + '<button class="btn ghost sm" data-act="pushDismiss">Agora não</button></div></div></div>';
+  }
+
+  /* ---------- PDF da escala (mensal por hospital) ---------- */
+  function loadScript(src) {
+    return new Promise((resolve, reject) => {
+      if (document.querySelector('script[data-src="' + src + '"]')) return resolve();
+      const s = document.createElement('script'); s.src = src; s.dataset.src = src; s.onload = resolve;
+      s.onerror = () => reject(new Error('Não foi possível carregar o gerador de PDF. Verifique a internet.'));
+      document.head.appendChild(s);
+    });
+  }
+  function openPdfModal() {
+    const m = S.week, f = ymd(new Date(m.getFullYear(), m.getMonth(), 1)), t = ymd(new Date(m.getFullYear(), m.getMonth() + 1, 0));
+    const sel = new Set(selectedHospitals().map((h) => h.id));
+    openModal('Escala em PDF', '<div class="grid cols2"><div><label class="f" for="pdf-from">De</label><input class="input" type="date" id="pdf-from" value="' + f + '"></div>' +
+      '<div><label class="f" for="pdf-to">Até</label><input class="input" type="date" id="pdf-to" value="' + t + '"></div></div>' +
+      '<div class="field" style="margin-top:12px"><label class="f">Hospitais</label>' + visibleHospitals().map((h) => '<label class="check" style="margin:6px 0"><input type="checkbox" name="pdf-h" value="' + h.id + '"' + (sel.has(h.id) ? ' checked' : '') + '> ' + esc(h.name) + '</label>').join('') + '</div>' +
+      '<p class="hint">Uma página por hospital e por mês (A4 deitado), com o médico de cada turno em cada UTI. Dias fora do período ficam em cinza.</p>' +
+      '<div class="mf"><button class="btn" data-act="mclose">Cancelar</button><button class="btn primary" data-act="pdfGo">Gerar PDF</button></div>');
+  }
+  function fitText(pdf, t, w) {
+    if (pdf.getTextWidth(t) <= w) return t;
+    while (t.length > 1 && pdf.getTextWidth(t + '…') > w) t = t.slice(0, -1);
+    return t + '…';
+  }
+  async function generatePdf(from, to, hospIds) {
+    await ensureRange(from, to);
+    await loadScript('vendor/jspdf.umd.min.js');
+    const pdf = new window.jspdf.jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+    const W = 297, H = 210, M = 10, MES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+    const SEM = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'];
+    const now = new Date(), gen = 'Gerado em ' + fmtDMY(now) + ' às ' + fmtHM(now) + ' · Plantão UTI';
+    const months = []; const d0 = parseYmd(from); d0.setDate(1); const dEnd = parseYmd(to);
+    for (const d = new Date(d0); d <= dEnd; d.setMonth(d.getMonth() + 1)) months.push(new Date(d));
+    let firstPage = true;
+    for (const hid of hospIds) {
+      const h = hospById(hid), us = S.units.filter((u) => u.hospital_id === hid);
+      if (!h || !us.length) continue;
+      for (const m0 of months) {
+        if (!firstPage) pdf.addPage(); firstPage = false;
+        pdf.setFont('helvetica', 'bold'); pdf.setFontSize(15); pdf.setTextColor(11, 110, 116);
+        pdf.text('Escala de plantões · ' + h.name, M, 13);
+        pdf.setFontSize(13); pdf.setTextColor(21, 35, 37); pdf.text(MES[m0.getMonth()] + ' de ' + m0.getFullYear(), W - M, 13, { align: 'right' });
+        pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(91, 109, 112);
+        pdf.text('UTIs: ' + us.map((u) => u.name).join(', ') + '   ·   D = diurno 7h–19h   ·   N = noturno 19h–7h   ·   Período: ' + fmtDMY(from) + ' a ' + fmtDMY(to), M, 19);
+        const gStart = startOfWeek(m0), mLast = new Date(m0.getFullYear(), m0.getMonth() + 1, 0);
+        const weeks = Math.ceil((Math.round((mLast - gStart) / DAY) + 1) / 7);
+        const top = 23, headH = 6, bottom = H - 9, colW = (W - 2 * M) / 7, rowH = (bottom - top - headH) / weeks;
+        SEM.forEach((n, i) => {
+          pdf.setFillColor(11, 110, 116); pdf.rect(M + i * colW, top, colW, headH, 'F');
+          pdf.setTextColor(255, 255, 255); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(8); pdf.text(n, M + i * colW + colW / 2, top + 4.1, { align: 'center' });
+        });
+        for (let w = 0; w < weeks; w++) for (let i = 0; i < 7; i++) {
+          const day = addDays(gStart, w * 7 + i), ds = ymd(day), x = M + i * colW, y = top + headH + w * rowH;
+          const inMonth = day.getMonth() === m0.getMonth(), inRange = ds >= from && ds <= to;
+          if (!inMonth || !inRange) { pdf.setFillColor(238, 241, 241); pdf.rect(x, y, colW, rowH, 'F'); }
+          else if (i >= 5) { pdf.setFillColor(247, 250, 250); pdf.rect(x, y, colW, rowH, 'F'); }
+          pdf.setDrawColor(200, 210, 210); pdf.setLineWidth(0.2); pdf.rect(x, y, colW, rowH);
+          if (!inMonth) continue;
+          pdf.setFont('helvetica', 'bold'); pdf.setFontSize(8.5);
+          if (inRange) pdf.setTextColor(21, 35, 37); else pdf.setTextColor(160, 160, 160);
+          pdf.text(String(day.getDate()), x + 1.5, y + 3.7);
+          if (!inRange) continue;
+          const lines = [];
+          us.forEach((u) => { if (us.length > 1) lines.push(['u', u.name]); ['D', 'N'].forEach((t) => { const dc = docOf(sid(ds, t, u.id)); lines.push([t, dc ? shortName(docScaleName(dc)) : '—']); }); });
+          const avail = rowH - 5, lh = Math.min(3.3, avail / lines.length), fs = Math.max(4.5, Math.min(7.5, lh * 2.25));
+          let yy = y + 5 + lh * 0.75;
+          lines.forEach(([k, txt]) => {
+            if (k === 'u') { pdf.setFont('helvetica', 'bold'); pdf.setFontSize(fs - 0.6); pdf.setTextColor(11, 110, 116); pdf.text(fitText(pdf, txt, colW - 3), x + 1.5, yy); }
+            else {
+              pdf.setFont('helvetica', 'bold'); pdf.setFontSize(fs); pdf.setTextColor(91, 109, 112); pdf.text(k, x + 1.5, yy);
+              pdf.setFont('helvetica', 'normal'); if (txt === '—') pdf.setTextColor(170, 170, 170); else pdf.setTextColor(21, 35, 37);
+              pdf.text(fitText(pdf, txt, colW - 6), x + 4.6, yy);
+            }
+            yy += lh;
+          });
+        }
+      }
+    }
+    if (firstPage) throw new Error('Nenhuma UTI nos hospitais escolhidos.');
+    const n = pdf.getNumberOfPages();
+    for (let i = 1; i <= n; i++) {
+      pdf.setPage(i); pdf.setFont('helvetica', 'normal'); pdf.setFontSize(7); pdf.setTextColor(120, 120, 120);
+      pdf.text(gen, M, H - 4); pdf.text('Página ' + i + ' de ' + n, W - M, H - 4, { align: 'right' });
+    }
+    pdf.save('escala_' + from + '_a_' + to + '.pdf');
   }
 
   /* ---------- submits ---------- */
@@ -939,11 +1184,26 @@
     S.login.resendAt = Date.now() + 60000;
   }
   const SUBMIT = {
-    sendCode: async (form) => {
-      const email = form.querySelector('#lg-email').value.trim().toLowerCase();
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { showLogin('Digite um e-mail válido.'); return; }
+    loginPw: async (form) => {
+      const email = form.querySelector('#lg-email').value.trim().toLowerCase(), password = form.querySelector('#lg-pw').value;
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { toast('Digite um e-mail válido.', 'bad'); return; }
       S.login.email = email;
-      await busy(form.querySelector('button[type=submit]'), 'Enviando…', async () => { await sendOtp(email); S.login.step = 'code'; showLogin(); });
+      if (!password) { toast('Digite sua senha ou use "Receber código por e-mail".', 'bad'); return; }
+      await busy(form.querySelector('button[type=submit]'), 'Entrando…', async () => {
+        const { error } = await sb.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+      });
+    },
+    savePw: async (form) => {
+      const a = form.querySelector('#pw1').value, b = form.querySelector('#pw2').value;
+      if (a.length < 8) { toast('A senha precisa ter pelo menos 8 caracteres.', 'bad'); return; }
+      if (a !== b) { toast('As duas senhas não são iguais.', 'bad'); return; }
+      await busy(form.querySelector('button[type=submit]'), 'Salvando…', async () => {
+        const { data, error } = await sb.auth.updateUser({ password: a, data: { has_password: true } });
+        if (error) throw error;
+        if (data && data.user && S.session) S.session.user = data.user;
+        closeModal(); toast('Senha salva. Nos próximos acessos, entre com e-mail e senha.', 'ok', 5000);
+      });
     },
     verifyCode: async (form) => {
       const token = form.querySelector('#lg-code').value.replace(/\D/g, '');
@@ -959,11 +1219,18 @@
       if (!row.name) { toast('Informe o nome.', 'bad'); return; }
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.email)) { toast('Informe um e-mail válido.', 'bad'); return; }
       if (!(id && id === S.me.id)) { row.active = g('active').checked; row.is_manager = g('is_manager').checked; }
+      const hosps = [...form.querySelectorAll('[name=hosp]:checked')].map((i) => i.value);
       const old = id ? docById(id) : null;
       if (old && old.user_id && old.email !== row.email && !(await confirmBox('E-mail alterado', 'Este médico já entrou no app com <b>' + esc(old.email) + '</b>. A conta atual continua vinculada. Para ele passar a entrar com o novo e-mail, use também "Desvincular login". Salvar mesmo assim?', 'Salvar'))) return;
       await busy(form.querySelector('button[type=submit]'), 'Salvando…', async () => {
-        const q = id ? sb.from('doctors').update(row).eq('id', id) : sb.from('doctors').insert(row);
-        const { error } = await q; if (error) throw error;
+        let docId = id;
+        if (id) { const { error } = await sb.from('doctors').update(row).eq('id', id); if (error) throw error; }
+        else { const { data, error } = await sb.from('doctors').insert(row).select('id').single(); if (error) throw error; docId = data.id; }
+        const cur = [...(docHosps(docId) || [])].sort().join(','), want = hosps.slice().sort().join(',');
+        if (cur !== want) {
+          const { error: e1 } = await sb.from('doctor_hospitals').delete().eq('doctor_id', docId); if (e1) throw e1;
+          if (hosps.length) { const { error: e2 } = await sb.from('doctor_hospitals').insert(hosps.map((h) => ({ doctor_id: docId, hospital_id: h }))); if (e2) throw e2; }
+        }
         await loadStatic(); closeModal(); render(true); toast(id ? 'Cadastro atualizado.' : 'Médico cadastrado. Envie a ele o link do app.', 'ok');
       });
     },

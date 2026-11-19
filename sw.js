@@ -1,8 +1,8 @@
 /* Service worker do Plantão UTI.
    Arquivos do app: abre na hora a partir do cache e atualiza em segundo plano
    (a versão nova aparece na abertura seguinte). Supabase e fontes vão direto à rede.
-   Para forçar atualização imediata nos celulares, troque o nome do cache (v3 -> v4). */
-const CACHE = 'plantao-uti-v3';
+   Para forçar atualização imediata nos celulares, troque o nome do cache (v4 -> v5). */
+const CACHE = 'plantao-uti-v4';
 const SHELL = ['./', 'index.html', 'app.js', 'config.js', 'vendor/supabase.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png', 'icons/apple-touch-icon.png'];
 
@@ -23,5 +23,23 @@ self.addEventListener('fetch', (e) => {
     const net = fetch(req).then((res) => { if (res && res.ok && res.type === 'basic') c.put(req, res.clone()); return res; }).catch(() => undefined);
     if (hit) { e.waitUntil(net); return hit; }
     return (await net) || new Response('Sem conexão', { status: 503 });
+  }));
+});
+
+// Notificações push
+self.addEventListener('push', (e) => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch (x) { d = { title: 'Plantão UTI', body: e.data ? e.data.text() : '' }; }
+  e.waitUntil(self.registration.showNotification(d.title || 'Plantão UTI', {
+    body: d.body || '', icon: 'icons/icon-192.png', badge: 'icons/icon-192.png',
+    tag: d.tag || undefined, renotify: !!d.tag, data: { url: d.url || './' }
+  }));
+});
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const url = new URL((e.notification.data && e.notification.data.url) || './', self.registration.scope).href;
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+    for (const c of list) { if ('focus' in c) { if ('navigate' in c) c.navigate(url).catch(() => {}); return c.focus(); } }
+    return self.clients.openWindow(url);
   }));
 });
