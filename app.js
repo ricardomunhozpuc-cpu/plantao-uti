@@ -64,6 +64,8 @@
     meu: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>',
     out: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>',
     x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>',
+    eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>',
+    eyeOff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19M14.12 14.12a3 3 0 1 1-4.24-4.24M1 1l22 22"/></svg>',
     pin: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>'
   };
 
@@ -77,6 +79,7 @@
     if (/Failed to fetch|NetworkError|Load failed|network/i.test(m)) return 'Sem conexão com o servidor. Verifique a internet e tente de novo.';
     if (/rate limit|too many|over_email_send_rate/i.test(m)) return 'Muitas tentativas em pouco tempo. Aguarde alguns minutos e tente de novo.';
     if (/Token has expired|otp.*(expired|invalid)|invalid.*(token|otp)/i.test(m)) return 'Código inválido ou expirado. Confira os dígitos ou peça um novo código.';
+    if (/Auth session missing|session_not_found|refresh_token_not_found|Invalid Refresh Token/i.test(m)) return 'Sua sessão expirou. Toque em "Entrar de novo", receba o código por e-mail e crie a senha logo em seguida.';
     if (/Invalid login credentials/i.test(m)) return 'E-mail ou senha incorretos. No primeiro acesso, ou se esqueceu a senha, use "Receber código por e-mail".';
     if (/Password should be at least|weak.?password/i.test(m)) return 'A senha precisa ter pelo menos 8 caracteres.';
     if (/should be different|same_password/i.test(m)) return 'A nova senha precisa ser diferente da atual.';
@@ -281,6 +284,7 @@
     });
     sb.auth.onAuthStateChange((ev, session) => {
       S.session = session;
+      if (ev === 'SIGNED_OUT' && S.started) { setTimeout(resetToLogin, 0); return; }
       // não chamar o supabase de dentro do callback (evita travamento); adia
       if (ev === 'SIGNED_OUT') setTimeout(resetToLogin, 0);
       else if (session && !S.started && (ev === 'SIGNED_IN' || ev === 'INITIAL_SESSION')) setTimeout(startApp, 0);
@@ -372,8 +376,7 @@
       body = '<form data-submit="loginPw" class="stack" novalidate>' +
         '<div class="field"><label class="f" for="lg-email">Seu e-mail</label>' +
         '<input class="input" id="lg-email" type="email" inputmode="email" autocomplete="username" autocapitalize="off" spellcheck="false" required value="' + esc(L.email) + '" placeholder="nome@exemplo.com"></div>' +
-        '<div class="field"><label class="f" for="lg-pw">Senha</label>' +
-        '<input class="input" id="lg-pw" type="password" autocomplete="current-password" placeholder="Sua senha"></div>' +
+        pwField('lg-pw', 'Senha', 'current-password', ' placeholder="Sua senha"') +
         '<button class="btn primary block" type="submit">Entrar</button>' +
         '<div class="row" style="align-items:center;gap:10px;margin:2px 0"><hr style="flex:1;margin:0"><span class="muted tiny">ou</span><hr style="flex:1;margin:0"></div>' +
         '<button class="btn block" type="button" data-act="loginCode">Receber código por e-mail</button>' +
@@ -760,6 +763,13 @@
   const A = {
     reload: () => location.reload(),
     account: () => openAccount(),
+    pwEye: (el) => {
+      const i = $('#' + el.dataset.for); if (!i) return;
+      const show = i.type === 'password'; i.type = show ? 'text' : 'password';
+      el.innerHTML = show ? ICON.eyeOff : ICON.eye;
+      el.setAttribute('aria-label', show ? 'Ocultar senha' : 'Mostrar senha'); el.title = el.getAttribute('aria-label');
+      i.focus();
+    },
     pwOpen: () => openPwModal(false),
     pwLater: () => { try { sessionStorage.setItem('plantao-pw-later', '1'); } catch (e) { /* */ } closeModal(); },
     loginCode: (el) => {
@@ -1008,13 +1018,23 @@
   }
 
   /* ---------- conta e senha ---------- */
+  const pwField = (id, label, auto, extra) => '<div class="field"><label class="f" for="' + id + '">' + label + '</label><div class="pwwrap">' +
+    '<input class="input" id="' + id + '" type="password" autocomplete="' + auto + '" autocapitalize="off" autocorrect="off" spellcheck="false"' + (extra || '') + '>' +
+    '<button type="button" class="pweye" data-act="pwEye" data-for="' + id + '" aria-label="Mostrar senha" title="Mostrar senha">' + ICON.eye + '</button></div></div>';
+  const PW_RULES = [['len', 'Pelo menos 8 caracteres'], ['let', 'Pelo menos uma letra'], ['num', 'Pelo menos um número'], ['eq', 'As duas senhas iguais']];
+  function pwChecks(a, b) { return { len: a.length >= 8, let: /[A-Za-zÀ-ÿ]/.test(a), num: /\d/.test(a), eq: !!a && a === b }; }
+  function pwRulesHtml(a, b) {
+    const c = pwChecks(a || '', b || '');
+    return PW_RULES.map(([k, t]) => '<li class="' + (c[k] ? 'ok' : '') + '"><span class="tick">' + (c[k] ? '✓' : '•') + '</span>' + t + '</li>').join('');
+  }
   function openPwModal(first) {
     openModal(first ? 'Crie sua senha' : (hasPw() ? 'Trocar senha' : 'Criar senha'), '<form data-submit="savePw" novalidate>' +
       (first ? '<p class="small" style="margin-top:-4px">Com uma senha você entra direto, sem esperar o código por e-mail. O código continua valendo se esquecer a senha.</p>' : '') +
+      '<div class="note" style="margin:0 0 12px"><b>Requisitos da senha</b><ul class="pwrules" id="pw-rules">' + pwRulesHtml('', '') + '</ul>' +
+      '<div class="tiny muted" style="margin-top:6px">Dica: use uma frase fácil de lembrar e não repita a senha de outros sistemas. Toque no olho para ver o que está digitando.</div></div>' +
       '<input type="email" autocomplete="username" value="' + esc((S.session && S.session.user && S.session.user.email) || S.me.email) + '" style="display:none" readonly>' +
-      '<div class="field"><label class="f" for="pw1">Nova senha</label><input class="input" id="pw1" type="password" autocomplete="new-password" minlength="8" required autofocus></div>' +
-      '<div class="field"><label class="f" for="pw2">Repita a senha</label><input class="input" id="pw2" type="password" autocomplete="new-password" minlength="8" required></div>' +
-      '<div class="hint">Mínimo de 8 caracteres.</div>' +
+      pwField('pw1', 'Nova senha', 'new-password', ' data-input="pwCheck" autofocus') +
+      pwField('pw2', 'Repita a nova senha', 'new-password', ' data-input="pwCheck"') +
       '<div class="mf">' + (first ? '<button type="button" class="btn" data-act="pwLater">Agora não</button>' : '<button type="button" class="btn" data-act="mclose">Cancelar</button>') +
       '<button class="btn primary" type="submit">Salvar senha</button></div></form>');
   }
@@ -1025,6 +1045,11 @@
       '<div class="card" style="box-shadow:none;margin-top:10px"><h3>Senha</h3><p class="small muted" style="margin:6px 0 10px">' + (hasPw() ? 'Você já tem senha e pode trocá-la quando quiser.' : 'Crie uma senha para entrar sem esperar o código por e-mail.') + '</p><button class="btn sm" data-act="pwOpen">' + (hasPw() ? 'Trocar senha' : 'Criar senha') + '</button></div>' +
       '<div class="mf"><button class="btn danger" data-act="logout">' + ICON.out + ' Sair da conta</button></div>');
     renderPushBox();
+  }
+
+  function sessionLost() {
+    openModal('Sessão expirada', '<p>Por segurança, sua sessão expirou e a senha não foi salva.</p><p class="small muted">Toque em <b>Entrar de novo</b>, peça o código por e-mail e, logo depois de entrar, crie a senha. Leva menos de um minuto.</p>' +
+      '<div class="mf"><button class="btn primary" data-act="logout">Entrar de novo</button></div>');
   }
 
   /* ---------- notificações push ---------- */
@@ -1195,12 +1220,17 @@
       });
     },
     savePw: async (form) => {
-      const a = form.querySelector('#pw1').value, b = form.querySelector('#pw2').value;
-      if (a.length < 8) { toast('A senha precisa ter pelo menos 8 caracteres.', 'bad'); return; }
-      if (a !== b) { toast('As duas senhas não são iguais.', 'bad'); return; }
+      const a = form.querySelector('#pw1').value, b = form.querySelector('#pw2').value, c = pwChecks(a, b);
+      if (!c.len) { toast('A senha precisa ter pelo menos 8 caracteres.', 'bad'); return; }
+      if (!c.let || !c.num) { toast('A senha precisa ter pelo menos uma letra e um número.', 'bad'); return; }
+      if (!c.eq) { toast('As duas senhas não são iguais.', 'bad'); return; }
       await busy(form.querySelector('button[type=submit]'), 'Salvando…', async () => {
+        // garante uma sessão válida (o iPhone pode suspender a renovação automática em segundo plano)
+        let { data: sd } = await sb.auth.getSession();
+        if (!sd || !sd.session) { const r = await sb.auth.refreshSession(); sd = r.data; }
+        if (!sd || !sd.session) { sessionLost(); return; }
         const { data, error } = await sb.auth.updateUser({ password: a, data: { has_password: true } });
-        if (error) throw error;
+        if (error) { if (/session/i.test(error.message || '')) { sessionLost(); return; } throw error; }
         if (data && data.user && S.session) S.session.user = data.user;
         closeModal(); toast('Senha salva. Nos próximos acessos, entre com e-mail e senha.', 'ok', 5000);
       });
@@ -1273,6 +1303,7 @@
     }
   };
   const INPUT = {
+    pwCheck: () => { const ul = $('#pw-rules'); if (ul) ul.innerHTML = pwRulesHtml($('#pw1').value, $('#pw2').value); },
     cellFilter: (el) => { const box = $('#cell-opts'); if (box && S.modal && S.modal.opts) box.innerHTML = S.modal.opts(el.value.trim().toLowerCase()); }
   };
 

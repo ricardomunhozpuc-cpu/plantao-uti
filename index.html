@@ -127,6 +127,15 @@ textarea.input{min-height:80px;resize:vertical}
 .check input{width:20px;height:20px;accent-color:var(--brand)}
 .field+.field{margin-top:12px}
 .hint{font-size:.8rem;color:var(--muted);margin-top:4px}
+.pwwrap{position:relative}
+.pwwrap .input{padding-right:48px}
+.pweye{position:absolute;right:4px;top:50%;transform:translateY(-50%);border:0;background:transparent;color:var(--muted);width:40px;height:40px;display:flex;align-items:center;justify-content:center;cursor:pointer;border-radius:8px}
+.pweye:hover{background:var(--surface2)}
+.pweye svg{width:20px;height:20px}
+.pwrules{list-style:none;padding:0;margin:6px 0 0;font-size:.86rem}
+.pwrules li{display:flex;gap:8px;align-items:center;color:var(--muted);padding:1px 0}
+.pwrules li .tick{width:16px;text-align:center;font-weight:700}
+.pwrules li.ok{color:var(--ok)}
 .otp{letter-spacing:.35em;font-size:1.4rem;text-align:center;font-weight:700}
 
 /* login */
