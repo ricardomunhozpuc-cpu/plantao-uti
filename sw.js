@@ -1,10 +1,10 @@
 /* Service worker do Plantão UTI.
    Arquivos do app: abre na hora a partir do cache e atualiza em segundo plano
    (a versão nova aparece na abertura seguinte). Supabase e fontes vão direto à rede.
-   Para forçar atualização imediata nos celulares, troque o nome do cache (v8 -> v9). */
-const CACHE = 'plantao-uti-v8';
+   Para forçar atualização imediata nos celulares, troque o nome do cache (v9 -> v10). */
+const CACHE = 'plantao-uti-v9';
 const SHELL = ['./', 'index.html', 'app.js', 'config.js', 'vendor/supabase.js', 'manifest.webmanifest',
-  'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png', 'icons/apple-touch-icon.png'];
+  'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png', 'icons/apple-touch-icon.png', 'icons/favicon-64.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
