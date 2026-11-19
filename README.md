@@ -1,4 +1,4 @@
-# Plantão UTI — app de escala, trocas e presença
+# Opus Scala — app de escala, trocas e presença (antigo Plantão UTI)
 
 PWA estático (HTML + JavaScript puro, sem build) + Supabase (Postgres, login por código no e-mail, RLS, funções RPC, Realtime).
 5 UTIs em 3 hospitais, turnos fixos 7h–19h e 19h–7h. A especificação técnica completa está no documento "Plantão UTI — Especificação técnica e guia de implantação".

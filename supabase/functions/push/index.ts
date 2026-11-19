@@ -1,4 +1,4 @@
-// Edge Function "push": envia notificações Web Push do Plantão UTI.
+// Edge Function "push": envia notificações Web Push do Opus Scala.
 // Chamada só pelo banco (cabeçalho x-cron-token). Corpos aceitos:
 //   {"event":"test","doctor_id":"..."}            teste para o próprio usuário
 //   {"event":"swap","id":"...","status":"..."}     avisos de troca e anúncio (gatilho em swaps)
@@ -68,7 +68,7 @@ Deno.serve(async (req) => {
     const claim = async (key: string) => { const { data } = await sb.rpc("claim_notification", { p_key: key }); return !!data; };
 
     if (body.event === "test") {
-      await send([body.doctor_id], { title: "Notificações ativadas", body: "Você vai receber os avisos do Plantão UTI neste aparelho.", url: "./", tag: "teste" });
+      await send([body.doctor_id], { title: "Notificações ativadas", body: "Você vai receber os avisos do Opus Scala neste aparelho.", url: "./", tag: "teste" });
     } else if (body.event === "swap") {
       const { data: w } = await sb.from("swaps").select("*").eq("id", body.id).single();
       if (w) {

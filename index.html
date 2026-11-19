@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Plantão UTI</title>
+<title>Opus Scala</title>
 <meta name="description" content="Escala, trocas e presença dos plantões das UTIs">
 <meta name="theme-color" content="#0b6e74" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0e1a1c" media="(prefers-color-scheme: dark)">
@@ -11,13 +11,13 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="apple-mobile-web-app-title" content="Plantão UTI">
+<meta name="apple-mobile-web-app-title" content="Opus Scala">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/favicon-64.png">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Montserrat:wght@700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
 <style>
 :root{
   --bg:#f3f6f6; --surface:#ffffff; --surface2:#eef3f3; --line:#d7e0e0; --text:#152325; --muted:#5b6d70;
@@ -25,6 +25,7 @@
   --ok:#17803d; --ok-soft:#dcf3e4; --warn:#a15c00; --warn-soft:#fdf0d9; --bad:#b42318; --bad-soft:#fde4e1;
   --info:#1d5fb8; --info-soft:#e1ecfb; --gray-soft:#eceff0;
   --radius:14px; --shadow:0 1px 2px rgba(16,40,44,.06),0 4px 14px rgba(16,40,44,.06);
+  --logo-ink:#1e3a6e;
   --nav-h:64px; --safe-b:env(safe-area-inset-bottom,0px);
 }
 @media (prefers-color-scheme:dark){:root{
@@ -33,6 +34,7 @@
   --ok:#52c77a; --ok-soft:#163525; --warn:#f0b04c; --warn-soft:#3a2c12; --bad:#ff7a6b; --bad-soft:#40201c;
   --info:#7fb0ff; --info-soft:#1a2b45; --gray-soft:#22383a;
   --shadow:0 1px 2px rgba(0,0,0,.3);
+  --logo-ink:#8fb4ff;
 }}
 *{box-sizing:border-box}
 html,body{margin:0;padding:0}
@@ -51,7 +53,8 @@ h3{font-size:1rem}
 /* layout */
 .topbar{position:sticky;top:0;z-index:20;background:var(--surface);border-bottom:1px solid var(--line);padding:calc(env(safe-area-inset-top,0px) + 10px) 16px 10px;display:flex;align-items:center;gap:12px}
 .brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:1.05rem}
-.brand img{width:32px;height:32px;border-radius:8px;box-shadow:0 0 0 1px var(--line)}
+.brand img{width:30px;height:30px;object-fit:contain}
+.wordmark{font-family:Montserrat,"Atkinson Hyperlegible",system-ui,sans-serif;font-weight:700;color:var(--logo-ink);letter-spacing:-.01em}
 .topbar .spacer{flex:1}
 .who{font-size:.85rem;color:var(--muted);text-align:right;line-height:1.2}
 .seg{display:inline-flex;background:var(--surface2);border-radius:999px;padding:3px;border:1px solid var(--line)}
@@ -142,7 +145,8 @@ textarea.input{min-height:80px;resize:vertical}
 .center{min-height:100vh;min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:24px 16px}
 .login{width:100%;max-width:400px}
 .login .logo{display:flex;flex-direction:column;align-items:center;gap:10px;margin-bottom:22px;text-align:center}
-.login .logo img{width:84px;height:84px;border-radius:20px;box-shadow:0 0 0 1px var(--line),0 4px 14px rgba(16,40,44,.08)}
+.login .logo img.logo-sym{width:112px;height:auto}
+.login .logo h1.wordmark{font-size:2rem;margin-top:2px}
 
 /* agora */
 .clock{font-size:2.2rem;font-weight:700;letter-spacing:.02em}
@@ -242,7 +246,7 @@ table.tbl{width:100%;border-collapse:collapse;font-size:.86rem}
 <div id="app"><div class="center"><div class="spinner" aria-label="Carregando"></div></div></div>
 <div id="modal" aria-modal="true" role="dialog"></div>
 <div id="toast" aria-live="polite"></div>
-<noscript><p style="padding:20px">Ative o JavaScript para usar o Plantão UTI.</p></noscript>
+<noscript><p style="padding:20px">Ative o JavaScript para usar o Opus Scala.</p></noscript>
 <script src="config.js"></script>
 <script src="vendor/supabase.js"></script>
 <script src="app.js"></script>

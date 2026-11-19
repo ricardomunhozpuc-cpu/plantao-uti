@@ -1,5 +1,5 @@
 /* =====================================================================
-   Plantão UTI — frontend (JavaScript puro, sem framework, sem build)
+   Opus Scala (antigo Plantão UTI) — frontend (JavaScript puro, sem framework, sem build)
    Blocos: helpers · supabase · state · data loading · realtime ·
            auth flow · views · actions · boot
    Toda regra que importa é validada no banco (RLS + funções RPC).
@@ -422,7 +422,7 @@
       ? ['Cadastro inativo', 'Seu cadastro está inativo. Se isso for um engano, fale com o gestor da escala.']
       : ['E-mail não cadastrado', 'O e-mail <b>' + esc(email) + '</b> não está cadastrado na equipe. Peça ao gestor para cadastrá-lo exatamente como você digitou, ou entre com outro e-mail.'];
     S.started = false;
-    setApp('<div class="center"><div class="card login stack"><div class="logo"><img src="icons/icon-192.png" alt=""><h2>' + t[0] + '</h2></div><p>' + t[1] + '</p><button class="btn block" data-act="logout">Sair e usar outro e-mail</button></div></div>');
+    setApp('<div class="center"><div class="card login stack"><div class="logo"><img class="logo-sym" src="icons/symbol.png" alt=""><h2>' + t[0] + '</h2></div><p>' + t[1] + '</p><button class="btn block" data-act="logout">Sair e usar outro e-mail</button></div></div>');
   }
 
   function showLogin(msg) {
@@ -448,7 +448,7 @@
         '<button type="button" class="btn ghost sm" data-act="resend" ' + (wait ? 'disabled' : '') + '>' + (wait ? 'Reenviar em ' + wait + ' s' : 'Reenviar código') + '</button></div>' +
         '<p class="hint">Você também pode tocar no link do e-mail. No iPhone, com o app instalado na tela inicial, prefira digitar o código.</p></form>';
     }
-    setApp('<div class="center"><div class="login"><div class="logo"><img src="icons/icon-192.png" alt=""><h1>Plantão UTI</h1><div class="muted small">Escala, trocas e presença</div></div>' +
+    setApp('<div class="center"><div class="login"><div class="logo"><img class="logo-sym" src="icons/symbol.png" alt=""><h1 class="wordmark">Opus Scala</h1><div class="muted small">Escala, trocas e presença dos plantões</div></div>' +
       '<div class="card">' + (msg ? '<div class="chip bad" style="white-space:normal;margin-bottom:12px;display:block;padding:8px 10px;border-radius:10px">' + esc(msg) + '</div>' : '') + body + '</div></div></div>');
     const f = L.step === 'email' ? $('#lg-email') : $('#lg-code');
     if (f) setTimeout(() => f.focus(), 50);
@@ -490,7 +490,7 @@
     try { body = views[S.tab](); } catch (e) { console.error(e); body = '<div class="card">Erro ao montar a tela: ' + esc(e.message) + '</div>'; }
     const y = window.scrollY;
     setApp(
-      '<header class="topbar"><div class="brand"><img src="icons/icon-192.png" alt=""><span>Plantão UTI</span></div><div class="spacer"></div>' +
+      '<header class="topbar"><div class="brand"><img src="icons/symbol.png" alt=""><span class="wordmark">Opus Scala</span></div><div class="spacer"></div>' +
       (isMgr() ? '<div class="seg" role="group" aria-label="Modo"><button data-act="role" data-role="gestor" class="' + (S.role === 'gestor' ? 'on' : '') + '">Gestor</button><button data-act="role" data-role="plantonista" class="' + (S.role === 'plantonista' ? 'on' : '') + '">Plantonista</button></div>' : '') +
       '<button class="acct" data-act="account" title="Minha conta" aria-label="Minha conta"><span class="who">' + esc(shortName(S.me.name)) + '</span><span class="avatar">' + esc((shortName(S.me.name)[0] || '?').toUpperCase()) + '</span></button></header>' +
       '<nav class="tabs" aria-label="Seções">' + tabs.map((t) => '<button data-act="tab" data-tab="' + t[0] + '" class="' + (S.tab === t[0] ? 'on' : '') + '">' + ICON[t[0]] + '<span>' + t[1] + '</span>' + (t[0] === 'trocas' && badge ? '<span class="badge">' + badge + '</span>' : '') + '</button>').join('') + '</nav>' +
@@ -1204,7 +1204,7 @@
   }
   const needsProfile = () => !(S.me && validCrm(S.me.crm) && validPhone(S.me.phone));
   function viewProfile() {
-    return '<div class="center"><div class="login" style="max-width:460px"><div class="logo"><img src="icons/icon-192.png" alt=""><h1>Complete seu cadastro</h1><div class="muted small">Falta pouco, ' + esc(shortName(S.me.name).split(' ')[0]) + '. Estes dados aparecem para o gestor e para a equipe.</div></div>' +
+    return '<div class="center"><div class="login" style="max-width:460px"><div class="logo"><img class="logo-sym" src="icons/symbol.png" alt=""><h1>Complete seu cadastro</h1><div class="muted small">Falta pouco, ' + esc(shortName(S.me.name).split(' ')[0]) + '. Estes dados aparecem para o gestor e para a equipe.</div></div>' +
       '<form class="card stack" data-submit="saveProfile" novalidate>' + crmPhoneFields(S.me.crm, S.me.phone, true) +
       '<button class="btn primary block" type="submit">Salvar e continuar</button>' +
       '<button type="button" class="btn ghost sm" data-act="logout">Sair</button></form></div></div>';
@@ -1293,7 +1293,7 @@
     const html = {
       on: '<div class="row between"><span>' + chip('Ativadas', 'ok') + '</span><span class="row" style="gap:6px"><button class="btn sm" data-act="pushTest">Enviar teste</button><button class="btn sm" data-act="pushOff">Desativar</button></span></div><p class="hint">Avisos de trocas, lembretes de check-in e check-out' + (isMgr() ? ' e alertas de UTI sem check-in' : '') + '.</p>',
       off: '<p class="muted" style="margin:0 0 8px">Desativadas neste aparelho.</p><button class="btn primary sm" data-act="pushOn">Ativar notificações</button>',
-      denied: '<p style="margin:0">' + chip('Bloqueadas', 'bad') + '</p><p class="hint">Libere nas configurações: no iPhone, Ajustes > Notificações > Plantão UTI; no Android, toque no cadeado ao lado do endereço > Permissões > Notificações.</p>',
+      denied: '<p style="margin:0">' + chip('Bloqueadas', 'bad') + '</p><p class="hint">Libere nas configurações: no iPhone, Ajustes > Notificações > Opus Scala; no Android, toque no cadeado ao lado do endereço > Permissões > Notificações.</p>',
       'ios-install': '<p style="margin:0">No iPhone, as notificações só funcionam com o app instalado: no Safari, toque em <b>Compartilhar</b> > <b>Adicionar à Tela de Início</b> e abra o app pelo ícone. Precisa do iOS 16.4 ou mais novo.</p>',
       unsupported: '<p class="muted" style="margin:0">Este navegador não oferece notificações. No Android use o Chrome; no iPhone, o app instalado na tela inicial.</p>'
     }[st];
@@ -1338,7 +1338,7 @@
     const pdf = new window.jspdf.jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
     const W = 297, H = 210, M = 10, MES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
     const SEM = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'];
-    const now = new Date(), gen = 'Gerado em ' + fmtDMY(now) + ' às ' + fmtHM(now) + ' · Plantão UTI';
+    const now = new Date(), gen = 'Gerado em ' + fmtDMY(now) + ' às ' + fmtHM(now) + ' · Opus Scala';
     const months = []; const d0 = parseYmd(from); d0.setDate(1); const dEnd = parseYmd(to);
     for (const d = new Date(d0); d <= dEnd; d.setMonth(d.getMonth() + 1)) months.push(new Date(d));
     let firstPage = true;

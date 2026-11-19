@@ -1,10 +1,10 @@
-/* Service worker do Plantão UTI.
+/* Service worker do Opus Scala.
    Arquivos do app: abre na hora a partir do cache e atualiza em segundo plano
    (a versão nova aparece na abertura seguinte). Supabase e fontes vão direto à rede.
-   Para forçar atualização imediata nos celulares, troque o nome do cache (v9 -> v10). */
-const CACHE = 'plantao-uti-v9';
+   Para forçar atualização imediata nos celulares, troque o nome do cache (v10 -> v11). */
+const CACHE = 'plantao-uti-v10';
 const SHELL = ['./', 'index.html', 'app.js', 'config.js', 'vendor/supabase.js', 'manifest.webmanifest',
-  'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png', 'icons/apple-touch-icon.png', 'icons/favicon-64.png'];
+  'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png', 'icons/apple-touch-icon.png', 'icons/favicon-64.png', 'icons/symbol.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -29,8 +29,8 @@ self.addEventListener('fetch', (e) => {
 // Notificações push
 self.addEventListener('push', (e) => {
   let d = {};
-  try { d = e.data ? e.data.json() : {}; } catch (x) { d = { title: 'Plantão UTI', body: e.data ? e.data.text() : '' }; }
-  e.waitUntil(self.registration.showNotification(d.title || 'Plantão UTI', {
+  try { d = e.data ? e.data.json() : {}; } catch (x) { d = { title: 'Opus Scala', body: e.data ? e.data.text() : '' }; }
+  e.waitUntil(self.registration.showNotification(d.title || 'Opus Scala', {
     body: d.body || '', icon: 'icons/icon-192.png', badge: 'icons/icon-192.png',
     tag: d.tag || undefined, renotify: !!d.tag, data: { url: d.url || './' }
   }));

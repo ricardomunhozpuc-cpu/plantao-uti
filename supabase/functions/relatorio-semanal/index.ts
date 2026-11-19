@@ -48,9 +48,9 @@ Deno.serve(async (req) => {
       method: "POST",
       headers: { "api-key": key, "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({
-        sender: { name: st.report_from_name || "Plantão UTI", email: st.report_from },
+        sender: { name: st.report_from_name || "Opus Scala", email: st.report_from },
         to: recipients.map((email) => ({ email })),
-        subject: `Plantão UTI · presença de ${br(from)} a ${br(to)}`,
+        subject: `Opus Scala · presença de ${br(from)} a ${br(to)}`,
         htmlContent: emailHtml(from, to, lines, sums),
         attachment: [{ name: `presenca_${from}_a_${to}.xlsx`, content: encodeBase64(xlsx) }],
       }),

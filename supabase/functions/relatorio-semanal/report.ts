@@ -111,7 +111,7 @@ const fmtBR = (ymd: string) => ymd.split("-").reverse().join("/");
 
 export async function buildWorkbook(d: Data, from: string, to: string, now: Date, lines: Line[], sums: Sum[]): Promise<Uint8Array> {
   const tz = d.settings.tz;
-  const wb = new ExcelJS.Workbook(); wb.creator = "Plantão UTI"; wb.created = now;
+  const wb = new ExcelJS.Workbook(); wb.creator = "Opus Scala"; wb.created = now;
   const head = { font: { bold: true, color: { argb: "FFFFFFFF" } }, fill: { type: "pattern", pattern: "solid", fgColor: { argb: "FF0B6E74" } }, alignment: { vertical: "middle", wrapText: true } } as const;
   const fill = (argb: string) => ({ type: "pattern", pattern: "solid", fgColor: { argb } }) as ExcelJS.Fill;
 
@@ -175,7 +175,7 @@ export async function buildWorkbook(d: Data, from: string, to: string, now: Date
   const info = wb.addWorksheet("Sobre");
   info.columns = [{ width: 34 }, { width: 70 }];
   const gen = asLocal(tz, now.toISOString())!;
-  [["Relatório", "Presença dos plantonistas — Plantão UTI"], ["Período", `${fmtBR(from)} a ${fmtBR(to)} (plantões que começaram nesse intervalo)`],
+  [["Relatório", "Presença dos plantonistas — Opus Scala"], ["Período", `${fmtBR(from)} a ${fmtBR(to)} (plantões que começaram nesse intervalo)`],
    ["Gerado em", gen.toISOString().slice(0, 16).replace("T", " ") + ` (${tz})`],
    ["Tolerância de atraso", `${d.settings.tolerance_min} min`],
    ["Pontual", "Check-in até o início do turno + tolerância"], ["Saída antecipada", "Check-out antes do fim do turno − tolerância"],
@@ -200,5 +200,5 @@ ${lines.length ? `<p style="font-size:15px"><b>${tot.n}</b> plantões · <b>${to
 <table style="border-collapse:collapse;font-size:13px;width:100%"><tr><th ${th}>Médico</th><th ${th}>Plantões</th><th ${th}>Pontuais</th><th ${th}>Atrasos</th><th ${th}>Sem check-in</th><th ${th}>Sem check-out</th><th ${th}>Horas</th></tr>
 ${sums.map((s) => `<tr><td ${tdl}>${esc(s.doctor)}</td><td ${td}>${s.n}</td><td ${td}>${s.ok}</td><td ${td}>${s.late}</td><td ${td}>${s.noin}</td><td ${td}>${s.noout}</td><td ${td}>${s.hours.toFixed(1).replace(".", ",")}</td></tr>`).join("")}
 </table>` : `<p>Nenhum plantão escalado nesse período.</p>`}
-<p style="font-size:12px;color:#5b6d70;margin-top:18px">Enviado automaticamente pelo Plantão UTI toda segunda-feira. Ajustes e detalhes: aba Presença do app.</p></div>`;
+<p style="font-size:12px;color:#5b6d70;margin-top:18px">Enviado automaticamente pelo Opus Scala toda segunda-feira. Ajustes e detalhes: aba Presença do app.</p></div>`;
 }
