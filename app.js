@@ -121,8 +121,12 @@
   const hospOfUnit = (uid) => { const u = unitById(uid); return u ? hospById(u.hospital_id) : null; };
   const isMgr = () => !!(S.me && S.me.is_manager);
   // Hospitais em que o médico trabalha (sem vínculo = todos)
-  const docHosps = (id) => S.links.get(id) || null;
-  const worksAt = (docId, hospId) => { const s = docHosps(docId); return !s || s.has(hospId); };
+  // UTIs em que o médico trabalha (sem vínculo = todas)
+  const docUnits = (id) => S.links.get(id) || null;
+  const worksIn = (docId, unitId) => { const s = docUnits(docId); return !s || s.has(unitId); };
+  const worksAt = (docId, hospId) => S.units.some((u) => u.hospital_id === hospId && worksIn(docId, u.id));
+  const isApt = (docId) => { const d = docById(docId); return !!(d && d.available !== false); };
+  const visibleUnits = (hid) => S.units.filter((u) => u.hospital_id === hid && (S.role === 'gestor' || worksIn(S.me.id, u.id)));
   const unitHosp = (uid) => (unitById(uid) || {}).hospital_id;
   const visibleHospitals = () => (S.role === 'gestor' ? S.hospitals : S.hospitals.filter((h) => worksAt(S.me.id, h.id)));
   const filterKey = () => 'plantao-filtro-' + S.me.id + '-' + S.role;
@@ -147,11 +151,12 @@
   function takeBlock(w) {
     const p = parseSid(w.shift_id), other = whereElse(S.me.id, p.date, p.turn, p.unit);
     if (shiftStart(w.shift_id) <= new Date()) return 'O plantão já começou';
-    if (!worksAt(S.me.id, unitHosp(p.unit))) return 'Você não trabalha neste hospital';
+    if (!isApt(S.me.id)) return 'Você está marcado como não apto a novos plantões';
+    if (!worksIn(S.me.id, p.unit)) return 'Você não trabalha nesta UTI';
     if (other) return 'Você já está na ' + unitName(other) + ' neste turno';
     return '';
   }
-  const openAds = () => S.swaps.filter((w) => w.status === 'aberta' && w.from_doctor !== S.me.id && shiftStart(w.shift_id) > new Date() && worksAt(S.me.id, unitHosp(parseSid(w.shift_id).unit)));
+  const openAds = () => S.swaps.filter((w) => w.status === 'aberta' && w.from_doctor !== S.me.id && shiftStart(w.shift_id) > new Date() && worksIn(S.me.id, parseSid(w.shift_id).unit));
   // Em que UTI um médico está num turno (exceto a UTI informada)
   function whereElse(docId, date, turn, exceptUnit) {
     for (const u of S.units) {
@@ -220,12 +225,12 @@
       sb.from('hospitals').select('*').order('sort').order('id'),
       sb.from('units').select('*').order('sort').order('id'),
       fetchAll(() => sb.from('doctors').select('*').order('name')),
-      fetchAll(() => sb.from('doctor_hospitals').select('*').order('doctor_id'))
+      fetchAll(() => sb.from('doctor_units').select('*').order('doctor_id'))
     ]);
     if (st.error) throw st.error; if (hs.error) throw hs.error; if (us.error) throw us.error;
     if (st.data) S.settings = st.data;
     S.hospitals = hs.data || []; S.units = us.data || []; S.doctors = ds;
-    S.links = new Map(); lk.forEach((r) => { if (!S.links.has(r.doctor_id)) S.links.set(r.doctor_id, new Set()); S.links.get(r.doctor_id).add(r.hospital_id); });
+    S.links = new Map(); lk.forEach((r) => { if (!S.links.has(r.doctor_id)) S.links.set(r.doctor_id, new Set()); S.links.get(r.doctor_id).add(r.unit_id); });
     const me = docById(S.me.id); if (me) S.me = me;
   }
   async function loadShifts() {
@@ -269,8 +274,8 @@
       const t = new Set(rtPending); rtPending.clear();
       try {
         const jobs = [];
-        if (t.has('settings') || t.has('hospitals') || t.has('units') || t.has('doctors') || t.has('doctor_hospitals')) jobs.push(loadStatic());
-        if (t.has('shifts') || t.has('doctor_hospitals')) jobs.push(loadShifts());
+        if (t.has('settings') || t.has('hospitals') || t.has('units') || t.has('doctors') || t.has('doctor_units')) jobs.push(loadStatic());
+        if (t.has('shifts') || t.has('doctor_units')) jobs.push(loadShifts());
         if (t.has('attendance')) jobs.push(loadAtt());
         if (t.has('swaps')) jobs.push(loadSwaps());
         await Promise.all(jobs);
@@ -471,6 +476,10 @@
   }
   function render(force) {
     if (!S.started || !S.me) return;
+    if (needsProfile()) {
+      if (!$('form[data-submit=saveProfile]')) setApp(viewProfile());
+      return;
+    }
     if (!force && isEditing()) { S.dirty = true; return; }
     S.dirty = false;
     const tabs = TABS[S.role];
@@ -516,7 +525,7 @@
         const tone = { ok: 'st-ok', warn: 'st-warn', bad: 'st-bad', info: 'st-info', muted: 'st-muted' }[s.tone];
         return '<div class="card unit ' + tone + '"><div class="row between"><span class="uname">' + esc(u.name) + '</span>' + chip(s.label, s.tone) + '</div>' +
           '<div class="doc">' + (doc ? esc(docScaleName(doc)) : '<span class="muted">Sem escala</span>') + '</div>' +
-          (d && d.phone ? '<div class="sub"><a href="tel:' + esc(String(d.phone).replace(/[^\d+]/g, '')) + '">' + esc(d.phone) + '</a></div>' : '') +
+          (d && d.phone ? '<div class="sub"><a href="tel:' + esc(String(d.phone).replace(/[^\d+]/g, '')) + '">' + esc(fmtPhone(d.phone)) + '</a></div>' : '') +
           (pa && pa.check_in && !pa.check_out ? '<div class="sub">' + chip('Check-out pendente', 'warn') + ' do turno anterior: ' + esc(docHistName(pdoc)) + '</div>' : '') +
           '<div class="sub">Próximo (' + turnName(next.turn).toLowerCase() + ' ' + fmtDM(next.date) + '): ' + (ndoc ? esc(docScaleName(ndoc)) : '<i>sem escala</i>') + '</div></div>';
       }).join('') + '</div>';
@@ -545,7 +554,7 @@
     }));
     let rows = '';
     selectedHospitals().forEach((h) => {
-      const us = S.units.filter((u) => u.hospital_id === h.id); if (!us.length) return;
+      const us = visibleUnits(h.id); if (!us.length) return;
       rows += '<tr class="hrow"><td colspan="9">' + esc(h.name) + '</td></tr>';
       us.forEach((u) => ['D', 'N'].forEach((t, ti) => {
         rows += '<tr>' + (ti === 0 ? '<th class="uh" rowspan="2"><b>' + esc(u.name) + '</b><span>' + esc(h.name) + '</span></th>' : '') +
@@ -587,15 +596,17 @@
       return '<div class="title">' + esc(docHistName(w.from_doctor)) + '<span class="swap-arrow">→</span><i>toda a equipe</i> ' + chip('Anúncio', 'info') + '</div>' +
         '<div class="small">Plantão oferecido: <b>' + esc(shiftDesc(w.shift_id)) + '</b></div>' +
         (w.note ? '<div class="note">' + esc(w.note) + '</div>' : '') +
+        (w.redirected_to ? '<div class="small" style="margin-top:4px">Gestor designou <b>' + esc(docHistName(w.redirected_to)) + '</b></div>' : '') +
         '<div class="muted tiny" style="margin-top:4px">Anunciado em ' + fmtDT(w.created_at) + '</div>';
     }
     return '<div class="title">' + esc(docHistName(w.from_doctor)) + '<span class="swap-arrow">' + (perm ? '⇄' : '→') + '</span>' + esc(docHistName(w.to_doctor)) + ' ' + chip(perm ? 'Permuta' : 'Repasse', 'brand') + '</div>' +
       '<div class="small">' + esc(docHistName(w.from_doctor).split(' (')[0]) + ' entrega: <b>' + esc(shiftDesc(w.shift_id)) + '</b></div>' +
       (perm ? '<div class="small">' + esc(docHistName(w.to_doctor).split(' (')[0]) + ' entrega: <b>' + esc(shiftDesc(w.return_shift_id)) + '</b></div>' : '') +
       (w.note ? '<div class="note">' + esc(w.note) + '</div>' : '') +
+      (w.redirected_to ? '<div class="small" style="margin-top:4px">Gestor redirecionou o plantão para <b>' + esc(docHistName(w.redirected_to)) + '</b></div>' : '') +
       '<div class="muted tiny" style="margin-top:4px">Pedido em ' + fmtDT(w.created_at) + (w.colleague_at ? ' · colega respondeu em ' + fmtDT(w.colleague_at) : '') + (w.decided_at ? ' · gestor decidiu em ' + fmtDT(w.decided_at) + (w.decided_by ? ' (' + esc(shortName(docHistName(w.decided_by))) + ')' : '') : '') + '</div>';
   }
-  const STATUS = { aberta: ['Anunciado à equipe', 'info'], colega: ['Aguardando colega', 'info'], gestor: ['Aguardando gestor', 'warn'], aprovada: ['Aprovada', 'ok'], recusada: ['Recusada pelo colega', 'bad'], negada: ['Não autorizada', 'bad'], cancelada: ['Cancelada', ''] };
+  const STATUS = { redirecionada: ['Redirecionada pelo gestor', 'info'], aberta: ['Anunciado à equipe', 'info'], colega: ['Aguardando colega', 'info'], gestor: ['Aguardando gestor', 'warn'], aprovada: ['Aprovada', 'ok'], recusada: ['Recusada pelo colega', 'bad'], negada: ['Não autorizada', 'bad'], cancelada: ['Cancelada', ''] };
   const statusChip = (s) => chip(STATUS[s][0], STATUS[s][1]);
 
   function viewTrocasGestor() {
@@ -604,8 +615,8 @@
     const ads = S.swaps.filter((w) => w.status === 'aberta');
     const hist = S.swaps.filter((w) => !['gestor', 'colega', 'aberta'].includes(w.status)).slice(0, 60);
     return '<div class="section-h"><h2>Aguardando sua autorização</h2>' + (wait.length ? chip(String(wait.length), 'warn') : '') + '</div>' +
-      (wait.length ? '<div class="list">' + wait.map((w) => '<div class="card item" data-swap="' + w.id + '"><div class="main">' + swapLine(w) + '</div></div><div class="row" style="margin:-4px 0 6px;justify-content:flex-end"><button class="btn danger sm" data-act="decide" data-id="' + w.id + '" data-ok="0">Não autorizar</button><button class="btn ok sm" data-act="decide" data-id="' + w.id + '" data-ok="1">Autorizar</button></div>').join('') + '</div>' : empty('Nenhum pedido aguardando autorização.')) +
-      '<div class="section"><div class="section-h"><h2>Plantões anunciados à equipe</h2>' + (ads.length ? chip(String(ads.length), 'info') : '') + '</div>' + (ads.length ? '<div class="list">' + ads.map((w) => '<div class="card item" data-swap="' + w.id + '"><div class="main">' + swapLine(w) + '</div>' + statusChip(w.status) + '</div>').join('') + '</div>' : empty('Nenhum anúncio aberto.')) + '</div>' +
+      (wait.length ? '<div class="list">' + wait.map((w) => '<div class="card item" data-swap="' + w.id + '"><div class="main">' + swapLine(w) + '</div></div><div class="row" style="margin:-4px 0 6px;justify-content:flex-end"><button class="btn danger sm" data-act="denyOpts" data-id="' + w.id + '">Não autorizar</button><button class="btn ok sm" data-act="decide" data-id="' + w.id + '" data-ok="1">Autorizar</button></div>').join('') + '</div>' : empty('Nenhum pedido aguardando autorização.')) +
+      '<div class="section"><div class="section-h"><h2>Plantões anunciados à equipe</h2>' + (ads.length ? chip(String(ads.length), 'info') : '') + '</div>' + (ads.length ? '<div class="list">' + ads.map((w) => '<div class="card" data-swap="' + w.id + '"><div class="item"><div class="main">' + swapLine(w) + '</div>' + statusChip(w.status) + '</div><div class="row" style="justify-content:flex-end;margin-top:8px"><button class="btn sm" data-act="redirect" data-id="' + w.id + '">Designar médico</button></div></div>').join('') + '</div>' : empty('Nenhum anúncio aberto.')) + '</div>' +
       '<div class="section"><div class="section-h"><h2>Aguardando o colega</h2></div>' + (col.length ? '<div class="list">' + col.map((w) => '<div class="card item" data-swap="' + w.id + '"><div class="main">' + swapLine(w) + '</div>' + statusChip(w.status) + '</div>').join('') + '</div>' : empty('Nenhum.')) + '</div>' +
       '<div class="section"><div class="section-h"><h2>Histórico</h2></div>' + (hist.length ? '<div class="list">' + hist.map((w) => '<div class="card item" data-swap="' + w.id + '"><div class="main">' + swapLine(w) + '</div>' + statusChip(w.status) + '</div>').join('') + '</div>' : empty('Ainda não há trocas concluídas.')) + '</div>';
   }
@@ -678,11 +689,16 @@
     const list = S.doctors.slice().sort((a, b) => (b.active - a.active) || a.name.localeCompare(b.name));
     return '<div class="section-h"><h2>Equipe <span class="muted small">(' + S.doctors.filter((d) => d.active).length + ' ativos)</span></h2><button class="btn primary sm" data-act="docEdit">+ Novo médico</button></div>' +
       (list.length ? '<div class="list">' + list.map((d) => '<div class="card item" ' + (d.active ? '' : 'style="opacity:.65"') + '><div class="main"><div class="title">' + esc(d.name) + (d.id === S.me.id ? ' <span class="muted small">(você)</span>' : '') + '</div>' +
-        '<div class="small muted">' + esc(d.email) + (d.crm ? ' · CRM ' + esc(d.crm) : '') + (d.phone ? ' · ' + esc(d.phone) : '') + '</div>' +
-        '<div class="small" style="margin-top:4px">' + (docHosps(d.id) ? esc(S.hospitals.filter((h) => docHosps(d.id).has(h.id)).map((h) => h.name).join(', ')) : '<span class="muted">Todos os hospitais</span>') + '</div>' +
-        '<div class="row" style="margin-top:6px;gap:6px">' + (d.is_manager ? chip('Gestor', 'brand') : '') + (d.active ? '' : chip('Inativo', 'bad')) + (d.user_id ? chip('Já entrou no app', 'ok') : chip('Ainda não entrou', '')) + '</div></div>' +
+        '<div class="small muted">' + esc(d.email) + (d.crm ? ' · CRM ' + esc(d.crm) : '') + (d.phone ? ' · ' + esc(fmtPhone(d.phone)) : '') + '</div>' +
+        '<div class="small" style="margin-top:4px">' + unitsSummary(d.id) + '</div>' +
+        '<div class="row" style="margin-top:6px;gap:6px">' + (d.is_manager ? chip('Gestor', 'brand') : '') + (d.active ? '' : chip('Inativo', 'bad')) + (d.available === false ? chip('Não apto a novos plantões', 'warn') : '') + (d.user_id ? chip('Já entrou no app', 'ok') : chip('Ainda não entrou', '')) + '</div></div>' +
         '<div class="actions"><button class="btn sm" data-act="docEdit" data-id="' + d.id + '">Editar</button></div></div>').join('') + '</div>' : empty('Nenhum médico cadastrado.')) +
       '<p class="muted tiny" style="margin-top:12px">O médico entra com o mesmo e-mail cadastrado aqui. Só quem já entrou no app pode receber pedidos de troca. Para remover alguém, desative o cadastro: o histórico de presença é preservado.</p>';
+  }
+
+  function unitsSummary(docId) {
+    const set = docUnits(docId); if (!set) return '<span class="muted">Todas as UTIs</span>';
+    return S.hospitals.map((h) => { const us = S.units.filter((u) => u.hospital_id === h.id && set.has(u.id)); return us.length ? '<b>' + esc(h.name) + ':</b> ' + esc(us.map((u) => u.name).join(', ')) : ''; }).filter(Boolean).join(' · ');
   }
 
   /* ---------- Gestor · Ajustes ---------- */
@@ -877,6 +893,7 @@
     /* gestor: escalar */
     cell: (el) => openCellModal(el.dataset.id),
     pickDoc: async (el) => {
+      if (el.classList.contains('dis')) { toast('Este médico está marcado como não apto a receber novos plantões. Altere em Equipe, se for o caso.', 'bad'); return; }
       const id = S.modal && S.modal.shiftId; if (!id) return;
       const doc = el.dataset.doc || null; const p = parseSid(id);
       const prev = S.shifts.get(id);
@@ -900,7 +917,7 @@
           const id = sid(d, t, u.id);
           if (docOf(id) || shiftStart(id) <= now) continue;
           const prev = docOf(sid(pd, t, u.id)); const pdoc = prev && docById(prev);
-          if (pdoc && pdoc.active) rows.push({ id, date: d, turn: t, unit_id: u.id, doctor_id: prev });
+          if (pdoc && pdoc.active && pdoc.available !== false) rows.push({ id, date: d, turn: t, unit_id: u.id, doctor_id: prev });
         }
       }
       if (!rows.length) { toast('Nada a preencher: os vazios desta semana também estão vazios na anterior (plantões já iniciados não são alterados).'); return; }
@@ -954,6 +971,32 @@
     cancelSwap: async (el) => {
       if (!(await confirmBox('Cancelar pedido', 'Desistir deste pedido de troca?', 'Cancelar pedido', true))) return;
       await busy(el, null, async () => { await rpc('cancel_swap', { p_id: el.dataset.id }); await loadSwaps(); render(true); toast('Cancelado.'); });
+    },
+    denyOpts: (el) => {
+      const w = S.swaps.find((x) => x.id === el.dataset.id); if (!w) return;
+      openModal('Não autorizar troca', '<div class="note" style="margin:0 0 12px">' + swapLine(w) + '</div>' +
+        '<p class="small" style="margin:0 0 10px">O que fazer com o plantão de <b>' + esc(docHistName(w.from_doctor)) + '</b>?</p>' +
+        '<div class="opt" data-act="denyOnly" data-id="' + w.id + '"><div class="grow"><b>Apenas não autorizar</b><div class="tiny muted">A troca é encerrada e o plantão continua com ' + esc(shortName(docHistName(w.from_doctor))) + '.</div></div></div>' +
+        '<div class="opt" data-act="redirect" data-id="' + w.id + '"><div class="grow"><b>Redirecionar para outro médico</b><div class="tiny muted">Você escolhe quem assume o plantão; a troca pedida não é feita.</div></div></div>' +
+        '<div class="mf"><button class="btn" data-act="mclose">Voltar</button></div>');
+    },
+    denyOnly: async (el) => {
+      const id = el.dataset.id; closeModal();
+      await busy(null, null, async () => {
+        await rpc('decide_swap', { p_id: id, p_approve: false });
+        await loadSwaps(); render(true); toast('Troca não autorizada. O plantão continua com quem pediu.');
+      });
+    },
+    redirect: (el) => openRedirectModal(el.dataset.id),
+    redirectPick: async (el) => {
+      if (el.classList.contains('dis')) return;
+      const id = S.modal && S.modal.swapId, doc = el.dataset.doc, w = S.swaps.find((x) => x.id === id);
+      if (!(await confirmBox('Redirecionar plantão', 'Escalar <b>' + esc(docHistName(doc)) + '</b> em ' + esc(shiftDesc(w.shift_id)) + '?' + (w.status === 'gestor' ? ' A troca pedida não será feita.' : ' O anúncio será encerrado.'), 'Redirecionar'))) return;
+      await busy(null, null, async () => {
+        await rpc('manager_redirect_swap', { p_id: id, p_doctor: doc });
+        await Promise.all([loadSwaps(), loadShifts()]); render(true);
+        toast('Plantão redirecionado para ' + shortName(docHistName(doc)) + '. Escala atualizada.', 'ok', 5000);
+      });
     },
     decide: async (el) => {
       const ok = el.dataset.ok === '1', w = S.swaps.find((x) => x.id === el.dataset.id);
@@ -1019,14 +1062,13 @@
   /* ---------- modais ---------- */
   function openCellModal(id) {
     const p = parseSid(id), cur = docOf(id), a = cur ? attOf(id, cur) : null, pend = pendingSwapFor(id);
-    const hid = unitHosp(p.unit);
-    const docs = S.doctors.filter((d) => d.active).sort((x, y) => (worksAt(y.id, hid) - worksAt(x.id, hid)) || x.name.localeCompare(y.name));
+    const docs = S.doctors.filter((d) => d.active).sort((x, y) => (isApt(y.id) - isApt(x.id)) || (worksIn(y.id, p.unit) - worksIn(x.id, p.unit)) || x.name.localeCompare(y.name));
     const opts = (filter) => '<div class="opt' + (!cur ? ' sel' : '') + '" data-act="pickDoc" data-doc=""><div class="grow"><b>Sem escala</b></div></div>' + docs.filter((d) => !filter || d.name.toLowerCase().includes(filter) || (d.crm || '').includes(filter)).map((d) => {
       const other = whereElse(d.id, p.date, p.turn, p.unit);
       const adj = [slotMove(p, -1), slotMove(p, 1)].some((s) => S.units.some((u) => docOf(sid(s.date, s.turn, u.id)) === d.id));
-      return '<div class="opt' + (d.id === cur ? ' sel' : '') + '" data-act="pickDoc" data-doc="' + d.id + '"><div class="grow"><b>' + esc(d.name) + '</b>' + (d.crm ? ' <span class="muted small">CRM ' + esc(d.crm) + '</span>' : '') +
+      return '<div class="opt' + (d.id === cur ? ' sel' : '') + (!isApt(d.id) && d.id !== cur ? ' dis' : '') + '" data-act="pickDoc" data-doc="' + d.id + '"><div class="grow"><b>' + esc(d.name) + '</b>' + (d.crm ? ' <span class="muted small">CRM ' + esc(d.crm) + '</span>' : '') +
         (other ? '<div class="small" style="color:var(--bad)">Já está na ' + esc(unitName(other)) + ' neste turno (vai gerar conflito)</div>' : '') +
-        (!worksAt(d.id, hid) ? '<div class="tiny" style="color:var(--warn)">Não está vinculado a este hospital</div>' : '') + (adj && !other ? '<div class="tiny muted">Emenda com turno vizinho (24 h)</div>' : '') + '</div></div>';
+        (!isApt(d.id) ? '<div class="tiny" style="color:var(--bad)">Não apto a receber novos plantões</div>' : !worksIn(d.id, p.unit) ? '<div class="tiny" style="color:var(--warn)">Não está vinculado a esta UTI</div>' : '') + (adj && !other ? '<div class="tiny muted">Emenda com turno vizinho (24 h)</div>' : '') + '</div></div>';
     }).join('');
     openModal(turnName(p.turn) + ' · ' + fmtDay(p.date), '<p class="muted small" style="margin-top:-6px">' + esc(unitFull(p.unit)) + ' · ' + turnHours(p.turn) + '</p>' +
       (a && a.check_in ? '<div class="note" style="margin-bottom:10px">' + esc(docHistName(cur)) + ' já fez check-in neste plantão. Trocar o médico agora não apaga esse registro.</div>' : '') +
@@ -1048,8 +1090,7 @@
     const M = S.modal; if (!M || !M.form) return;
     const f = M.form, p = parseSid(f.shift), now = new Date();
     const ta = $('#sw-note'); if (ta) f.note = ta.value;
-    const hid = unitHosp(p.unit);
-    const colleagues = S.doctors.filter((d) => d.active && d.id !== S.me.id && worksAt(d.id, hid)).sort((a, b) => a.name.localeCompare(b.name));
+    const colleagues = S.doctors.filter((d) => d.active && d.id !== S.me.id && worksIn(d.id, p.unit) && isApt(d.id)).sort((a, b) => a.name.localeCompare(b.name));
     const list = colleagues.map((d) => {
       const other = whereElse(d.id, p.date, p.turn, p.unit);
       const why = !d.user_id ? 'Ainda não entrou no app' : other ? 'Já está na ' + unitName(other) + ' neste turno' : '';
@@ -1060,14 +1101,14 @@
       const theirs = [...S.shifts.values()].filter((s) => s.doctor_id === f.to && shiftStart(s.id) > now).sort((a, b) => shiftStart(a.id) - shiftStart(b.id)).slice(0, 40);
       ret = '<div class="field"><label class="f">Plantão do colega que você assume</label>' + (theirs.length ? theirs.map((s) => {
         const same = s.date === p.date && s.turn === p.turn, other = whereElse(S.me.id, s.date, s.turn, s.unit_id), pend = pendingSwapFor(s.id);
-        const why = same ? 'Mesmo turno do seu plantão' : !worksAt(S.me.id, unitHosp(s.unit_id)) ? 'Você não trabalha neste hospital' : other ? 'Você já está na ' + unitName(other) + ' neste turno' : pend ? 'Troca em andamento' : '';
+        const why = same ? 'Mesmo turno do seu plantão' : !isApt(S.me.id) ? 'Você está marcado como não apto' : !worksIn(S.me.id, s.unit_id) ? 'Você não trabalha nesta UTI' : other ? 'Você já está na ' + unitName(other) + ' neste turno' : pend ? 'Troca em andamento' : '';
         return '<div class="opt' + (f.ret === s.id ? ' sel' : '') + (why ? ' dis' : '') + '" data-act="swRet" data-id="' + s.id + '"><div class="grow"><b>' + fmtDay(s.date) + ' · ' + turnName(s.turn) + '</b> <span class="muted small">' + esc(unitFull(s.unit_id)) + '</span>' + (why ? '<div class="tiny muted">' + esc(why) + '</div>' : '') + '</div></div>';
       }).join('') : '<div class="empty">Este colega não tem plantões futuros na escala.</div>') + '</div>';
     }
     const modeSeg = '<div class="field"><label class="f">Como oferecer</label><div class="seg"><button data-act="swMode" data-mode="colega" class="' + (f.mode !== 'todos' ? 'on' : '') + '">Para um colega</button><button data-act="swMode" data-mode="todos" class="' + (f.mode === 'todos' ? 'on' : '') + '">Anunciar para todos</button></div></div>';
     const note = '<div class="field"><label class="f" for="sw-note">Recado (opcional)</label><textarea class="input" id="sw-note" maxlength="280" placeholder="' + (f.mode === 'todos' ? 'Ex.: preciso deste dia livre, quem puder cobrir agradeço!' : 'Ex.: consegue cobrir? Te devo uma.') + '">' + esc(f.note) + '</textarea></div>';
     if (f.mode === 'todos') {
-      const n = S.doctors.filter((d) => d.active && d.id !== S.me.id && worksAt(d.id, hid) && !whereElse(d.id, p.date, p.turn, p.unit)).length;
+      const n = S.doctors.filter((d) => d.active && d.id !== S.me.id && worksIn(d.id, p.unit) && isApt(d.id) && !whereElse(d.id, p.date, p.turn, p.unit)).length;
       setModalBody('<div class="note" style="margin:0 0 12px"><b>Seu plantão:</b> ' + esc(shiftDesc(f.shift)) + '</div>' + modeSeg +
         '<div class="note" style="margin:0 0 12px">O plantão fica disponível para <b>' + n + '</b> colega' + (n === 1 ? '' : 's') + ' que trabalha' + (n === 1 ? '' : 'm') + ' neste hospital e estão livres no turno. O primeiro que pedir assume, e o gestor autoriza ou não. Você continua escalado até a autorização e pode cancelar o anúncio a qualquer momento.</div>' +
         note + '<div class="mf"><button class="btn" data-act="mclose">Cancelar</button><button class="btn primary" data-act="swSend">Anunciar plantão</button></div>');
@@ -1075,9 +1116,24 @@
     }
     setModalBody('<div class="note" style="margin:0 0 12px"><b>Seu plantão:</b> ' + esc(shiftDesc(f.shift)) + '</div>' + modeSeg +
       '<div class="field"><label class="f">Tipo</label><div class="seg"><button data-act="swType" data-type="repasse" class="' + (f.type === 'repasse' ? 'on' : '') + '">Repasse</button><button data-act="swType" data-type="permuta" class="' + (f.type === 'permuta' ? 'on' : '') + '">Permuta</button></div><div class="hint">' + (f.type === 'repasse' ? 'O colega assume seu plantão.' : 'Cada um assume um plantão do outro.') + '</div></div>' +
-      '<div class="field"><label class="f">Colega</label>' + (list || '<div class="empty">Nenhum colega trabalha neste hospital.</div>') + '</div>' + ret + note +
+      '<div class="field"><label class="f">Colega</label>' + (list || '<div class="empty">Nenhum colega apto trabalha nesta UTI.</div>') + '</div>' + ret + note +
       '<div class="mf"><button class="btn" data-act="mclose">Cancelar</button><button class="btn primary" data-act="swSend">Enviar pedido</button></div>' +
       '<p class="hint">O colega precisa aceitar e o gestor autorizar. A escala só muda depois da autorização.</p>');
+  }
+
+  function openRedirectModal(swapId) {
+    const w = S.swaps.find((x) => x.id === swapId); if (!w) return;
+    const p = parseSid(w.shift_id);
+    const docs = S.doctors.filter((d) => d.active && d.id !== w.from_doctor).sort((a, b) => (worksIn(b.id, p.unit) - worksIn(a.id, p.unit)) || a.name.localeCompare(b.name));
+    openModal('Redirecionar plantão', '<div class="note" style="margin:0 0 12px"><b>Plantão:</b> ' + esc(shiftDesc(w.shift_id)) + '<br><span class="small">Hoje com ' + esc(docHistName(w.from_doctor)) + '</span></div>' +
+      '<label class="f">Quem assume</label>' + (docs.map((d) => {
+        const other = whereElse(d.id, p.date, p.turn, p.unit);
+        const why = !isApt(d.id) ? 'Não apto a novos plantões' : other ? 'Já está na ' + unitName(other) + ' neste turno' : '';
+        return '<div class="opt' + (why ? ' dis' : '') + '" data-act="redirectPick" data-doc="' + d.id + '"><div class="grow"><b>' + esc(d.name) + '</b>' + (d.id === w.to_doctor ? ' <span class="chip">pediu a troca</span>' : '') +
+          (why ? '<div class="tiny muted">' + esc(why) + '</div>' : !worksIn(d.id, p.unit) ? '<div class="tiny" style="color:var(--warn)">Não está vinculado a esta UTI</div>' : '') + '</div></div>';
+      }).join('') || '<div class="empty">Nenhum médico disponível.</div>') +
+      '<div class="mf"><button class="btn" data-act="mclose">Cancelar</button></div>');
+    S.modal.swapId = swapId;
   }
 
   function openAdjustModal(id, doc) {
@@ -1096,15 +1152,62 @@
     openModal(id ? 'Editar médico' : 'Novo médico', '<form data-submit="saveDoc" data-id="' + (id || '') + '" novalidate>' +
       '<div class="field"><label class="f" for="d-name">Nome completo *</label><input class="input" id="d-name" name="name" required maxlength="100" value="' + esc(d.name) + '" autofocus></div>' +
       '<div class="field"><label class="f" for="d-email">E-mail (usado no login) *</label><input class="input" id="d-email" name="email" type="email" required autocapitalize="off" spellcheck="false" value="' + esc(d.email) + '"></div>' +
-      '<div class="grid cols2" style="margin-top:12px"><div><label class="f" for="d-crm">CRM</label><input class="input" id="d-crm" name="crm" maxlength="20" value="' + esc(d.crm || '') + '"></div>' +
-      '<div><label class="f" for="d-phone">Telefone</label><input class="input" id="d-phone" name="phone" type="tel" maxlength="30" value="' + esc(d.phone || '') + '"></div></div>' +
+      crmPhoneFields(d.crm, d.phone, false) +
       '<div class="field" style="margin-top:14px"><label class="check"><input type="checkbox" name="active" ' + (d.active ? 'checked' : '') + (self ? ' disabled' : '') + '> Ativo (pode entrar no app)</label></div>' +
       '<div class="field"><label class="check"><input type="checkbox" name="is_manager" ' + (d.is_manager ? 'checked' : '') + (self ? ' disabled' : '') + '> Gestor (monta a escala e autoriza trocas)</label>' + (self ? '<div class="hint">Você não pode desativar a si mesmo nem tirar o próprio papel de gestor.</div>' : '') + '</div>' +
-      '<div class="field" style="margin-top:14px"><label class="f">Hospitais em que trabalha</label>' + S.hospitals.map((h) => '<label class="check" style="margin:6px 0"><input type="checkbox" name="hosp" value="' + h.id + '"' + (id && docHosps(id) && docHosps(id).has(h.id) ? ' checked' : '') + '> ' + esc(h.name) + '</label>').join('') +
-        '<div class="hint">Nenhum marcado = trabalha em todos. O plantonista vê só a escala desses hospitais e só troca com colegas que trabalham neles.</div></div>' +
+      '<div class="field"><label class="check"><input type="checkbox" name="available" ' + (d.available !== false ? 'checked' : '') + '> Apto a receber novos plantões e assumir trocas</label><div class="hint">Desmarcado: continua com os plantões que já tem, mas não pode ser escalado em novos, nem receber pedidos de troca, nem assumir plantões anunciados.</div></div>' +
+      '<div class="field" style="margin-top:14px"><label class="f">UTIs em que trabalha</label>' + S.hospitals.map((h) => { const us = S.units.filter((u) => u.hospital_id === h.id); if (!us.length) return ''; return '<div style="margin:8px 0 2px" class="small"><b>' + esc(h.name) + '</b></div>' + us.map((u) => '<label class="check" style="margin:4px 0 4px 10px"><input type="checkbox" name="unit" value="' + u.id + '"' + (id && docUnits(id) && docUnits(id).has(u.id) ? ' checked' : '') + '> ' + esc(u.name) + '</label>').join(''); }).join('') +
+        '<div class="hint">Nenhuma marcada = trabalha em todas. O plantonista vê só a escala dessas UTIs e só troca plantões delas.</div></div>' +
       (id ? '<div class="small muted" style="margin-top:10px">' + (d.user_id ? 'Já entrou no app.' : 'Ainda não entrou no app.') + '</div>' : '') +
       '<div class="mf">' + (id && d.user_id && !self ? '<button type="button" class="btn danger" data-act="docUnlink" data-id="' + id + '" style="margin-right:auto">Desvincular login</button>' : '') +
       '<button type="button" class="btn" data-act="mclose">Cancelar</button><button class="btn primary" type="submit">Salvar</button></div></form>');
+  }
+
+  /* ---------- CRM e telefone ---------- */
+  const UFS = ['AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MT', 'MS', 'MG', 'PA', 'PB', 'PR', 'PE', 'PI', 'RJ', 'RN', 'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO'];
+  const DDDS = [11, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22, 24, 27, 28, 31, 32, 33, 34, 35, 37, 38, 41, 42, 43, 44, 45, 46, 47, 48, 49, 51, 53, 54, 55, 61, 62, 63, 64, 65, 66, 67, 68, 69, 71, 73, 74, 75, 77, 79, 81, 82, 83, 84, 85, 86, 87, 88, 89, 91, 92, 93, 94, 95, 96, 97, 98, 99];
+  const crmRe = /^(\d{1,7})-([A-Z]{2})$/, phoneRe = /^\+55(\d{2})(\d{8,9})$/;
+  const validCrm = (v) => { const m = crmRe.exec(v || ''); return !!m && UFS.includes(m[2]); };
+  const validPhone = (v) => { const m = phoneRe.exec(v || ''); return !!m && DDDS.includes(+m[1]) && (m[2].length === 9 ? m[2][0] === '9' : /^[2-8]/.test(m[2])); };
+  function fmtPhone(v) {
+    const m = phoneRe.exec(v || ''); if (!m) return v || '';
+    const n = m[2]; return '+55 (' + m[1] + ') ' + (n.length === 9 ? n.slice(0, 5) + '-' + n.slice(5) : n.slice(0, 4) + '-' + n.slice(4));
+  }
+  function crmPhoneFields(crm, phone, required) {
+    const c = crmRe.exec(crm || '') || [], p = phoneRe.exec(phone || '') || [];
+    const uf = c[2] || (required ? 'SP' : '');
+    return '<div class="field"><label class="f" for="f-crm">CRM' + (required ? ' *' : '') + '</label><div class="row" style="flex-wrap:nowrap;gap:8px">' +
+      '<input class="input" id="f-crm" name="crm_num" inputmode="numeric" pattern="[0-9]*" maxlength="7" placeholder="Número" value="' + esc(c[1] || '') + '" style="flex:1">' +
+      '<select class="input" name="crm_uf" aria-label="UF do CRM" style="width:96px">' + (required ? '' : '<option value="">UF</option>') + UFS.map((u) => '<option' + (u === uf ? ' selected' : '') + '>' + u + '</option>').join('') + '</select></div>' +
+      '<div class="hint">Só os números do CRM e a sigla do estado (UF). Exemplo: <b>123456</b> e <b>SP</b> → CRM 123456-SP.</div></div>' +
+      '<div class="field"><label class="f" for="f-ddd">Telefone de contato' + (required ? ' *' : '') + '</label><div class="row" style="flex-wrap:nowrap;gap:8px">' +
+      '<span class="input" style="width:64px;display:flex;align-items:center;justify-content:center;background:var(--surface2);font-weight:700">+55</span>' +
+      '<input class="input" id="f-ddd" name="ddd" inputmode="numeric" pattern="[0-9]*" maxlength="2" placeholder="DDD" value="' + esc(p[1] || '') + '" style="width:74px">' +
+      '<input class="input" name="tel" type="tel" inputmode="numeric" maxlength="10" placeholder="91234-5678" value="' + esc(p[2] ? (p[2].length === 9 ? p[2].slice(0, 5) + '-' + p[2].slice(5) : p[2].slice(0, 4) + '-' + p[2].slice(4)) : '') + '" style="flex:1"></div>' +
+      '<div class="hint">O +55 já vem preenchido. Digite o DDD (2 dígitos) e o número: celular com 9 dígitos começando por 9, ou fixo com 8.</div></div>';
+  }
+  // Lê e valida os campos; devolve {crm, phone} (ou null em caso de erro, já avisando)
+  function readCrmPhone(form, required) {
+    const num = (form.querySelector('[name=crm_num]').value || '').replace(/\D/g, ''), uf = form.querySelector('[name=crm_uf]').value;
+    const ddd = (form.querySelector('[name=ddd]').value || '').replace(/\D/g, ''), tel = (form.querySelector('[name=tel]').value || '').replace(/\D/g, '');
+    let crm = null, phone = null;
+    if (num || uf || required) {
+      if (!/^\d{1,7}$/.test(num) || !UFS.includes(uf)) { toast('CRM inválido: informe só os números (até 7 dígitos) e escolha a UF.', 'bad'); return null; }
+      crm = num + '-' + uf;
+    }
+    if (ddd || tel || required) {
+      phone = '+55' + ddd + tel;
+      if (!DDDS.includes(+ddd)) { toast('DDD inválido. Use os 2 dígitos do DDD, por exemplo 11.', 'bad'); return null; }
+      if (!validPhone(phone)) { toast('Telefone inválido: celular com 9 dígitos começando por 9, ou fixo com 8 dígitos.', 'bad'); return null; }
+    }
+    return { crm, phone };
+  }
+  const needsProfile = () => !(S.me && validCrm(S.me.crm) && validPhone(S.me.phone));
+  function viewProfile() {
+    return '<div class="center"><div class="login" style="max-width:460px"><div class="logo"><img src="icons/icon-192.png" alt=""><h1>Complete seu cadastro</h1><div class="muted small">Falta pouco, ' + esc(shortName(S.me.name).split(' ')[0]) + '. Estes dados aparecem para o gestor e para a equipe.</div></div>' +
+      '<form class="card stack" data-submit="saveProfile" novalidate>' + crmPhoneFields(S.me.crm, S.me.phone, true) +
+      '<button class="btn primary block" type="submit">Salvar e continuar</button>' +
+      '<button type="button" class="btn ghost sm" data-act="logout">Sair</button></form></div></div>';
   }
 
   /* ---------- conta e senha ---------- */
@@ -1333,23 +1436,32 @@
         if (error) throw error;
       });
     },
+    saveProfile: async (form) => {
+      const cp = readCrmPhone(form, true); if (!cp) return;
+      await busy(form.querySelector('button[type=submit]'), 'Salvando…', async () => {
+        const d = await rpc('update_my_profile', { p_crm: cp.crm, p_phone: cp.phone });
+        if (d) { S.me = d; const i = S.doctors.findIndex((x) => x.id === d.id); if (i >= 0) S.doctors[i] = d; }
+        render(true); toast('Cadastro completo. Bem-vindo!', 'ok');
+      });
+    },
     saveDoc: async (form) => {
       const id = form.dataset.id, g = (n) => form.querySelector('[name=' + n + ']');
-      const row = { name: g('name').value.trim(), email: g('email').value.trim().toLowerCase(), crm: g('crm').value.trim() || null, phone: g('phone').value.trim() || null };
+      const cp = readCrmPhone(form, false); if (!cp) return;
+      const row = { name: g('name').value.trim(), email: g('email').value.trim().toLowerCase(), crm: cp.crm, phone: cp.phone, available: g('available').checked };
       if (!row.name) { toast('Informe o nome.', 'bad'); return; }
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.email)) { toast('Informe um e-mail válido.', 'bad'); return; }
       if (!(id && id === S.me.id)) { row.active = g('active').checked; row.is_manager = g('is_manager').checked; }
-      const hosps = [...form.querySelectorAll('[name=hosp]:checked')].map((i) => i.value);
+      const units = [...form.querySelectorAll('[name=unit]:checked')].map((i) => i.value);
       const old = id ? docById(id) : null;
       if (old && old.user_id && old.email !== row.email && !(await confirmBox('E-mail alterado', 'Este médico já entrou no app com <b>' + esc(old.email) + '</b>. A conta atual continua vinculada. Para ele passar a entrar com o novo e-mail, use também "Desvincular login". Salvar mesmo assim?', 'Salvar'))) return;
       await busy(form.querySelector('button[type=submit]'), 'Salvando…', async () => {
         let docId = id;
         if (id) { const { error } = await sb.from('doctors').update(row).eq('id', id); if (error) throw error; }
         else { const { data, error } = await sb.from('doctors').insert(row).select('id').single(); if (error) throw error; docId = data.id; }
-        const cur = [...(docHosps(docId) || [])].sort().join(','), want = hosps.slice().sort().join(',');
+        const cur = [...(docUnits(docId) || [])].sort().join(','), want = units.slice().sort().join(',');
         if (cur !== want) {
-          const { error: e1 } = await sb.from('doctor_hospitals').delete().eq('doctor_id', docId); if (e1) throw e1;
-          if (hosps.length) { const { error: e2 } = await sb.from('doctor_hospitals').insert(hosps.map((h) => ({ doctor_id: docId, hospital_id: h }))); if (e2) throw e2; }
+          const { error: e1 } = await sb.from('doctor_units').delete().eq('doctor_id', docId); if (e1) throw e1;
+          if (units.length) { const { error: e2 } = await sb.from('doctor_units').insert(units.map((u) => ({ doctor_id: docId, unit_id: u }))); if (e2) throw e2; }
         }
         await loadStatic(); closeModal(); render(true); toast(id ? 'Cadastro atualizado.' : 'Médico cadastrado. Envie a ele o link do app.', 'ok');
       });

@@ -40,7 +40,7 @@ Deno.serve(async (req) => {
     const { data: st } = await sb.from("settings").select("*").eq("id", 1).single();
     const tz: string = st.tz;
     const [{ data: doctors }, { data: units }, { data: hospitals }] = await Promise.all([
-      sb.from("doctors").select("id,name,is_manager,active"), sb.from("units").select("*"), sb.from("hospitals").select("*"),
+      sb.from("doctors").select("id,name,is_manager,active,available"), sb.from("units").select("*"), sb.from("hospitals").select("*"),
     ]);
     const doc = new Map((doctors || []).map((d: any) => [d.id, d]));
     const unit = new Map((units || []).map((u: any) => [u.id, u]));
@@ -80,16 +80,15 @@ Deno.serve(async (req) => {
         if (w.status === "aberta") {
           // anúncio: avisa colegas elegíveis (trabalham no hospital e estão livres no turno) e os gestores
           const [date, turn, uid] = w.shift_id.split("_");
-          const hid = (unit.get(uid) as any || {}).hospital_id;
           const [{ data: links }, { data: same }] = await Promise.all([
-            sb.from("doctor_hospitals").select("*"),
+            sb.from("doctor_units").select("*"),
             sb.from("shifts").select("doctor_id,unit_id").eq("date", date).eq("turn", turn),
           ]);
           const L = new Map<string, Set<string>>();
-          (links || []).forEach((l: any) => { if (!L.has(l.doctor_id)) L.set(l.doctor_id, new Set()); L.get(l.doctor_id)!.add(l.hospital_id); });
+          (links || []).forEach((l: any) => { if (!L.has(l.doctor_id)) L.set(l.doctor_id, new Set()); L.get(l.doctor_id)!.add(l.unit_id); });
           const busy = new Set((same || []).filter((x: any) => x.unit_id !== uid).map((x: any) => x.doctor_id));
-          const elig = (doctors || []).filter((d: any) => d.active && d.id !== w.from_doctor && !managers.includes(d.id)
-            && (!L.has(d.id) || L.get(d.id)!.has(hid)) && !busy.has(d.id)).map((d: any) => d.id);
+          const elig = (doctors || []).filter((d: any) => d.active && d.available !== false && d.id !== w.from_doctor && !managers.includes(d.id)
+            && (!L.has(d.id) || L.get(d.id)!.has(uid)) && !busy.has(d.id)).map((d: any) => d.id);
           await send(elig, { title: "Plantão disponível", body: `${short(from.name)} anunciou: ${what}. Toque para assumir.`, url: urlP, tag });
           await send(mgrs, { title: "Plantão anunciado", body: `${short(from.name)} ofereceu para a equipe: ${what}`, url: urlG, tag: `${tag}-g` });
         } else if (w.status === "colega") {
@@ -102,6 +101,12 @@ Deno.serve(async (req) => {
         } else if (w.status === "recusada") await send([w.from_doctor], { title: `${short(to.name)} recusou a troca`, body: what, url: urlP, tag });
         else if (w.status === "aprovada") await send([w.from_doctor, w.to_doctor], { title: "Troca autorizada", body: `A escala foi atualizada: ${what}`, url: urlP, tag });
         else if (w.status === "negada") await send([w.from_doctor, w.to_doctor], { title: "Troca não autorizada", body: what, url: urlP, tag });
+        else if (w.status === "redirecionada") {
+          const nw: any = doc.get(w.redirected_to) || {};
+          await send([w.redirected_to], { title: "Você foi escalado pelo gestor", body: what, url: urlP, tag });
+          await send([w.from_doctor], { title: "Seu plantão foi repassado pelo gestor", body: `Agora com ${short(nw.name)}: ${what}`, url: urlP, tag });
+          if (w.to_doctor && w.to_doctor !== w.redirected_to) await send([w.to_doctor], { title: "Troca não autorizada", body: `O gestor escalou outro médico: ${what}`, url: urlP, tag });
+        }
         else if (w.status === "cancelada" && body.old_status && !started) {
           if (w.to_doctor) await send([w.to_doctor], { title: `${short(from.name)} cancelou o pedido de troca`, body: what, url: urlP, tag });
           await send(mgrs, { title: body.old_status === "aberta" ? "Anúncio de plantão cancelado" : "Pedido de troca cancelado", body: `${short(from.name)}: ${what}`, url: urlG, tag: `${tag}-g` });
