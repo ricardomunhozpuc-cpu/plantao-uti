@@ -183,7 +183,8 @@
         r.earlyOut = co < en - tol;
         return Object.assign(r, { code: 'saiu', label: 'Já saiu às ' + fmtHM(co), tone: r.earlyOut ? 'warn' : 'muted' });
       }
-      if (now > en) return Object.assign(r, { code: 'semout', label: 'Sem check-out', tone: 'warn' });
+      if (now.getTime() > en.getTime() + 6 * HOUR) return Object.assign(r, { code: 'semout', label: 'Sem check-out', tone: 'bad' });
+      if (now > en) return Object.assign(r, { code: 'semout', label: 'Check-out pendente até ' + fmtHM(new Date(en.getTime() + 6 * HOUR)), tone: 'warn' });
       return Object.assign(r, r.lateMin
         ? { code: 'presente', label: 'Presente · atraso ' + r.lateMin + ' min', tone: 'warn' }
         : { code: 'presente', label: 'Presente desde ' + fmtHM(ci), tone: 'ok' });
@@ -211,7 +212,8 @@
       if (a.check_out) {
         const co = new Date(a.check_out); hoursMs = co - ci;
         if (co < en - tol) tags.push(['Saída antecipada', 'warn']);
-      } else if (now > en) tags.push(['Sem check-out', 'bad']);
+      } else if (now.getTime() > en.getTime() + 6 * HOUR) tags.push(['Sem check-out', 'bad']);
+      else if (now > en) tags.push(['Check-out pendente (prazo ' + fmtHM(new Date(en.getTime() + 6 * HOUR)) + ')', 'warn']);
       else tags.push(['Em andamento', 'info']);
     }
     if (a && a.manual) tags.push(['Ajuste manual', 'brand']);

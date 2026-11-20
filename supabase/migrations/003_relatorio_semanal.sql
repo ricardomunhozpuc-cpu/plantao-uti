@@ -15,8 +15,8 @@ language sql stable security definer set search_path = private, public as $$
 $$;
 revoke execute on function public.check_cron_token(text) from public, anon, authenticated;
 grant execute on function public.check_cron_token(text) to service_role;
--- Toda segunda 10:30 UTC = 7:30 em São Paulo; período = semana anterior (seg–dom)
-select cron.schedule('relatorio-semanal', '30 10 * * 1', $$
+-- Toda segunda 16:30 UTC = 13:30 em São Paulo (após o prazo de 6 h do check-out do noturno de domingo); período = semana anterior (seg–dom)
+select cron.schedule('relatorio-semanal', '30 16 * * 1', $$
   select net.http_post(
     url := 'https://wyjivrrneqvrkmlncjbo.supabase.co/functions/v1/relatorio-semanal',
     headers := jsonb_build_object('Content-Type','application/json','x-cron-token',(select token from private.cron_token)),
