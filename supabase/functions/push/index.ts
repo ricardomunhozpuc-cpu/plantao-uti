@@ -2,6 +2,7 @@
 // Chamada só pelo banco (cabeçalho x-cron-token). Corpos aceitos:
 //   {"event":"test","doctor_id":"..."}            teste para o próprio usuário
 //   {"event":"swap","id":"...","status":"..."}     avisos de troca e anúncio (gatilho em swaps)
+//   {"event":"shifts","by":"...","changes":[...]}  gestor escalou/retirou médicos (gatilho em shifts)
 //   {"job":"tick"}                                 lembretes de check-in/out e UTI descoberta (pg_cron, 5 min)
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 import webpush from "npm:web-push@3.6.7";
@@ -112,6 +113,19 @@ Deno.serve(async (req) => {
           await send(mgrs, { title: body.old_status === "aberta" ? "Anúncio de plantão cancelado" : "Pedido de troca cancelado", body: `${short(from.name)}: ${what}`, url: urlG, tag: `${tag}-g` });
         }
       }
+    } else if (body.event === "shifts") {
+      // gestor escalou ou retirou médicos pela aba Escala: um aviso por médico, agrupando os plantões
+      const nowMs = Date.now(), add = new Map<string, string[]>(), rem = new Map<string, string[]>();
+      const push = (m: Map<string, string[]>, k: string, v: string) => { if (!m.has(k)) m.set(k, []); m.get(k)!.push(v); };
+      for (const c of body.changes || []) {
+        if (shiftStart(tz, c.shift).getTime() + 12 * HOUR < nowMs) continue;   // plantão já terminou
+        if (c.new && c.new !== body.by && (doc.get(c.new) as any)?.active) push(add, c.new, c.shift);
+        if (c.old && c.old !== body.by && (doc.get(c.old) as any)?.active) push(rem, c.old, c.shift);
+      }
+      const byStart = (ids: string[]) => ids.sort((a, b) => shiftStart(tz, a).getTime() - shiftStart(tz, b).getTime());
+      const list = (ids: string[]) => byStart(ids).slice(0, 3).map(desc).join("; ") + (ids.length > 3 ? ` e mais ${ids.length - 3}` : "");
+      for (const [d, ids] of add) await send([d], { title: ids.length === 1 ? "Você foi escalado" : `Você foi escalado em ${ids.length} plantões`, body: list(ids), url: "./?tab=meu&role=plantonista", tag: `escala-${d}-${nowMs}` });
+      for (const [d, ids] of rem) await send([d], { title: ids.length === 1 ? "Você foi retirado da escala" : `Você foi retirado de ${ids.length} plantões`, body: list(ids), url: "./?tab=escala&role=plantonista", tag: `retirado-${d}-${nowMs}` });
     } else if (body.job === "tick") {
       const now = new Date(), today = localYmd(tz, now), early = st.early_min * MIN, tol = st.tolerance_min * MIN;
       const { data: shifts } = await sb.from("shifts").select("*").gte("date", addDays(today, -1)).lte("date", today).not("doctor_id", "is", null);
